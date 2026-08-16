@@ -30,6 +30,7 @@ from checkpoint_confidence import calculate_checkpoint_confidence
 from config import load_config, resolve_path
 from coordinate_conversion import media_mm_to_pixel
 from interruption_classification import classify_interruption
+from job_manifest import build_job_manifest
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
@@ -576,6 +577,43 @@ def job_detail(job_id):
     ]
     conn.close()
     return jsonify(job=job, checkpoints=checkpoints, events=events, status_history=status_history)
+
+
+@app.get("/api/jobs/<job_id>/manifest")
+def job_manifest(job_id):
+    output_format = request.args.get("format", "json").lower()
+    if output_format not in {"json", "md", "markdown"}:
+        return error_response("format must be json or md", 400, "INVALID_MANIFEST_FORMAT")
+    conn = db()
+    job = row_dict(conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+    conn.close()
+    if not job:
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    source_path = Path(job["source_path"])
+    source_exists = source_path.exists()
+    actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_exists else None
+    manifest = build_job_manifest(
+        job,
+        source_exists=source_exists,
+        actual_hash=actual_hash,
+        captured_at=now(),
+    )
+    if output_format in {"md", "markdown"}:
+        lines = [
+            f"# Job Manifest — {job_id}",
+            "",
+            f"- File: `{job['file_name']}`",
+            f"- Captured at: `{manifest['captured_at']}`",
+            f"- Capture mode: `{manifest['capture_mode']}`",
+            f"- Source integrity: **{manifest['job']['source_integrity']}**",
+            f"- Printer/RIP: `{job['printer_model']}` / `{job['rip_name']}`",
+            f"- Media: `{job['media_width_mm']} × {job['media_length_mm']} mm`",
+            "",
+            "> This manifest records host-side job evidence. It does not claim printer control or physical completion.",
+            "",
+        ]
+        return Response("\n".join(lines), mimetype="text/markdown")
+    return jsonify(manifest)
 
 
 @app.get("/api/jobs/<job_id>/integrity")
