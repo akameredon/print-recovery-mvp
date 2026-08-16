@@ -34,6 +34,7 @@ from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
 from output_naming import continuation_output_name
+from registration_strip import generate_registration_strip
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = load_config(ROOT)
@@ -1099,6 +1100,76 @@ def continuation_preview(job_id):
         regions=region_output,
         preview_file=preview_name,
         preview_url=f"/outputs/{preview_name}",
+        operator_confirmation_required=True,
+    )
+
+
+@app.post("/api/jobs/<job_id>/registration-strip")
+def registration_strip(job_id):
+    payload = request.get_json(silent=True) or request.form
+    conn = db()
+    job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    try:
+        selected_y_mm = float(payload.get("y_mm", 0))
+        strip_height_mm = float(
+            payload.get("strip_height_mm", max(10.0, float(job["overlap_mm"] or 5) * 2))
+        )
+        if selected_y_mm < 0 or strip_height_mm <= 0:
+            raise ValueError("y_mm must be non-negative and strip_height_mm must be positive")
+        version = (
+            conn.execute(
+                "SELECT COUNT(*) FROM events WHERE job_id=? AND event_type='REGISTRATION_STRIP_GENERATED'",
+                (job_id,),
+            ).fetchone()[0]
+            + 1
+        )
+        source_token = "".join(
+            character for character in job["source_hash"] if character.isalnum()
+        )[:12]
+        output_name = f"registration_strip-v{version:03d}_{job_id}_{source_token}_at-{selected_y_mm:.1f}mm.png"
+        output_path = OUTPUT_DIR / output_name
+        while output_path.exists():
+            version += 1
+            output_name = f"registration_strip-v{version:03d}_{job_id}_{source_token}_at-{selected_y_mm:.1f}mm.png"
+            output_path = OUTPUT_DIR / output_name
+        details = generate_registration_strip(
+            Path(job["source_path"]),
+            output_path,
+            selected_y_mm=selected_y_mm,
+            media_length_mm=max(float(job["media_length_mm"] or 0), 1.0),
+            strip_height_mm=strip_height_mm,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        conn.close()
+        return error_response(
+            f"Registration strip generation failed: {error}", 400, "REGISTRATION_STRIP_FAILED"
+        )
+    record_event(
+        conn,
+        job_id,
+        "REGISTRATION_STRIP_GENERATED",
+        "recovery_engine",
+        {
+            "file": output_name,
+            "version": version,
+            "source_hash": job["source_hash"],
+            "selected_y_mm": selected_y_mm,
+            "strip_height_mm": strip_height_mm,
+        },
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(
+        ok=True,
+        job_id=job_id,
+        file=output_name,
+        url=f"/outputs/{output_name}",
+        version=version,
+        source_hash=job["source_hash"],
+        **details,
         operator_confirmation_required=True,
     )
 

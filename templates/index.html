@@ -131,6 +131,7 @@
         <div>
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
           <button class="secondary" onclick="validateOrientation('{{job.id}}')">Validate image orientation and origin</button>
+          <button class="secondary" onclick="registrationStrip('{{job.id}}')">Generate registration strip</button>
           <button class="secondary" onclick="timeline('{{job.id}}')">Show evidence timeline</button>
           <a href="/api/jobs/{{job.id}}/events/raw" download>Download raw events</a>
           <button class="secondary" onclick="checkpointMap('{{job.id}}')">Show checkpoint map</button>
@@ -166,6 +167,14 @@
     {% endfor %}
   </section>
 <script>
+async function registrationStrip(id) {
+  const y = document.getElementById('y-'+id).value;
+  const overlap = document.getElementById('overlap-'+id).value;
+  const r = await fetch('/api/jobs/'+id+'/registration-strip', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({y_mm:y,strip_height_mm:Math.max(10, Number(overlap)*2)})});
+  const body = await r.json();
+  document.getElementById('out-'+id).textContent = JSON.stringify(body, null, 2);
+  if (body.url) document.getElementById('out-'+id).innerHTML += '\\n<a href="'+body.url+'" target="_blank">Open registration strip</a>';
+}
 async function validateOrientation(id) {
   const r = await fetch('/api/jobs/'+id+'/orientation');
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
