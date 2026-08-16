@@ -38,12 +38,17 @@ preview_after = requests.get(
 )
 assert preview_after.json()["overlap_mm"] == 20
 assert preview_after.json()["regions"][0]["end_y_mm"] == 80.0
+checkpoint = requests.post(
+    BASE + f"/api/jobs/{job_id}/checkpoint", json={"y_mm": 100, "evidence": "transmitted"}
+)
+assert checkpoint.status_code == 200, checkpoint.text
 continuation = requests.post(BASE + f"/api/jobs/{job_id}/continuation", json={"y_mm": 100})
 assert continuation.status_code == 200, continuation.text
 assert continuation.json()["overlap_mm"] == 20
 conn = sqlite3.connect("data/print_recovery.sqlite3")
 event = conn.execute(
-    "SELECT event_type,payload FROM events WHERE job_id=? ORDER BY id DESC LIMIT 2", (job_id,)
+    "SELECT event_type,payload FROM events WHERE job_id=? AND event_type IN ('JOB_OVERLAP_UPDATED','CONTINUATION_GENERATED') ORDER BY id DESC",
+    (job_id,),
 ).fetchall()
 conn.close()
 assert event[0][0] == "CONTINUATION_GENERATED"

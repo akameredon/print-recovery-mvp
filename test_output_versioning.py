@@ -36,6 +36,10 @@ job_id, source_hash = conn.execute(
     ("versioning.png",),
 ).fetchone()
 conn.close()
+checkpoint = requests.post(
+    BASE + f"/api/jobs/{job_id}/checkpoint", json={"y_mm": 90, "evidence": "transmitted"}
+)
+assert checkpoint.status_code == 200, checkpoint.text
 first = requests.post(BASE + f"/api/jobs/{job_id}/continuation", json={"y_mm": 90, "overlap_mm": 5})
 second = requests.post(
     BASE + f"/api/jobs/{job_id}/continuation", json={"y_mm": 90, "overlap_mm": 5}

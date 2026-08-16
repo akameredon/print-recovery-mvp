@@ -34,6 +34,7 @@ from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
 from output_naming import continuation_output_name
+from recovery_safety import assess_recovery_safety
 from registration_strip import generate_registration_strip
 
 ROOT = Path(__file__).resolve().parent
@@ -644,16 +645,18 @@ def recovery_readiness(job_id):
     checkpoint_confidence = (
         calculate_checkpoint_confidence(checkpoint_dict) if checkpoint_dict else None
     )
+    safety = assess_recovery_safety(
+        source_integrity=integrity,
+        has_checkpoint=checkpoint is not None,
+        has_interruption=interruption is not None,
+    )
 
-    if integrity != "verified":
+    if safety["blockers"]:
         readiness = "blocked"
-        reason = "Source file integrity must be restored or reviewed before recovery."
-    elif not checkpoint:
-        readiness = "blocked"
-        reason = "No checkpoint has been recorded for this job."
-    elif not interruption:
+        reason = safety["blockers"][0]["message"]
+    elif safety["warnings"]:
         readiness = "review_required"
-        reason = "A checkpoint exists, but no interruption record has been captured."
+        reason = safety["warnings"][0]["message"]
     else:
         readiness = "ready_for_operator_review"
         reason = "Source integrity, checkpoint evidence and interruption history are present."
@@ -671,6 +674,7 @@ def recovery_readiness(job_id):
         "checkpoint": checkpoint_dict,
         "checkpoint_confidence": checkpoint_confidence,
         "interruption": interruption_dict,
+        "recovery_safety": safety,
         "operator_confirmation_required": True,
         "request_correlation_id": g.get("correlation_id", "-"),
     }
@@ -1275,6 +1279,29 @@ def continuation(job_id):
         conn.close()
         return error_response("overlap_mm must be non-negative", 400, "INVALID_OVERLAP")
     source_path = Path(job["source_path"])
+    source_exists = source_path.exists()
+    actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_exists else None
+    checkpoint = latest_checkpoint(conn, job_id)
+    safety = assess_recovery_safety(
+        source_integrity=(
+            "missing"
+            if not source_exists
+            else ("verified" if actual_hash == job["source_hash"] else "changed")
+        ),
+        has_checkpoint=checkpoint is not None,
+        has_interruption=True,
+    )
+    if not safety["safe_to_generate"]:
+        conn.close()
+        return (
+            jsonify(
+                error="RECOVERY_BLOCKED",
+                message="Continuation generation is blocked until recovery evidence is restored or reviewed.",
+                job_id=job_id,
+                recovery_safety=safety,
+            ),
+            409,
+        )
     generated_count = conn.execute(
         "SELECT COUNT(*) FROM decisions WHERE job_id=? AND operator_action='generated_continuation'",
         (job_id,),
