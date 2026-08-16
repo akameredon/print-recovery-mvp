@@ -4,12 +4,21 @@ import hashlib
 import json
 import os
 import sqlite3
-import uuid
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import (
+    Flask,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    url_for,
+)
 from PIL import Image
 from werkzeug.exceptions import HTTPException
 
@@ -40,10 +49,16 @@ def begin_request():
 
 @app.after_request
 def finish_request(response):
-    duration_ms = round((time.perf_counter() - g.get("request_started", time.perf_counter())) * 1000, 2)
+    duration_ms = round(
+        (time.perf_counter() - g.get("request_started", time.perf_counter())) * 1000, 2
+    )
     logger.info(
         "request_completed",
-        extra={"route": request.path, "status_code": response.status_code, "duration_ms": duration_ms},
+        extra={
+            "route": request.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        },
     )
     response.headers["X-Correlation-ID"] = g.get("correlation_id", "-")
     return response
@@ -71,13 +86,19 @@ def handle_http_error(error):
         "http_error",
         extra={"route": request.path, "status_code": error.code},
     )
-    return error_response(error.description, error.code or 500, error.name.upper().replace(" ", "_"))
+    return error_response(
+        error.description, error.code or 500, error.name.upper().replace(" ", "_")
+    )
 
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
     logger.exception("unhandled_exception", extra={"route": request.path, "status_code": 500})
-    return error_response("Internal server error. Use the correlation ID when requesting support.", 500, "INTERNAL_ERROR")
+    return error_response(
+        "Internal server error. Use the correlation ID when requesting support.",
+        500,
+        "INTERNAL_ERROR",
+    )
 
 
 def now() -> str:
@@ -129,15 +150,30 @@ def diagnostics_snapshot():
         versions = applied_versions(conn)
         conn.close()
         expected_versions = [version for version, _, _ in MIGRATIONS]
-        checks["database"] = {"status": "ok", "schema_versions": versions, "expected_versions": expected_versions}
+        checks["database"] = {
+            "status": "ok",
+            "schema_versions": versions,
+            "expected_versions": expected_versions,
+        }
         if versions != expected_versions:
-            checks["database"] = {"status": "degraded", "schema_versions": versions, "expected_versions": expected_versions}
+            checks["database"] = {
+                "status": "degraded",
+                "schema_versions": versions,
+                "expected_versions": expected_versions,
+            }
     except Exception as error:
         logger.exception("diagnostics_database_failed")
         checks["database"] = {"status": "error", "error": str(error)}
 
     checks["paths"] = {
-        "status": "ok" if DATA_DIR.exists() and OUTPUT_DIR.exists() and os.access(DATA_DIR, os.W_OK) and os.access(OUTPUT_DIR, os.W_OK) else "degraded",
+        "status": (
+            "ok"
+            if DATA_DIR.exists()
+            and OUTPUT_DIR.exists()
+            and os.access(DATA_DIR, os.W_OK)
+            and os.access(OUTPUT_DIR, os.W_OK)
+            else "degraded"
+        ),
         "data_dir": str(DATA_DIR),
         "output_dir": str(OUTPUT_DIR),
         "log_path": str(LOG_PATH),
@@ -175,7 +211,9 @@ def diagnostics():
 @app.route("/")
 def index():
     conn = db()
-    jobs = [row_dict(r) for r in conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()]
+    jobs = [
+        row_dict(r) for r in conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
+    ]
     conn.close()
     return render_template("index.html", jobs=jobs)
 
@@ -216,7 +254,9 @@ def create_job():
             now(),
         ),
     )
-    record_event(conn, job_id, "JOB_CREATED", "operator", {"file_name": safe_name, "source_hash": digest})
+    record_event(
+        conn, job_id, "JOB_CREATED", "operator", {"file_name": safe_name, "source_hash": digest}
+    )
     conn.commit()
     conn.close()
     logger.info("job_created", extra={"job_id": job_id})
@@ -243,7 +283,9 @@ def checkpoint(job_id):
         (job_id, y_mm, band_mm, state, evidence, confidence, now()),
     )
     conn.execute("UPDATE jobs SET status=?,updated_at=? WHERE id=?", ("PRINTING", now(), job_id))
-    record_event(conn, job_id, "CHECKPOINT", "operator_or_adapter", {"y_mm": y_mm, "evidence": evidence})
+    record_event(
+        conn, job_id, "CHECKPOINT", "operator_or_adapter", {"y_mm": y_mm, "evidence": evidence}
+    )
     conn.commit()
     conn.close()
     return jsonify(ok=True, job_id=job_id, y_mm=y_mm, confidence=confidence)
@@ -271,8 +313,18 @@ def job_detail(job_id):
     if not job:
         conn.close()
         return jsonify(error="Job not found"), 404
-    checkpoints = [row_dict(r) for r in conn.execute("SELECT * FROM checkpoints WHERE job_id=? ORDER BY y_mm", (job_id,)).fetchall()]
-    events = [row_dict(r) for r in conn.execute("SELECT * FROM events WHERE job_id=? ORDER BY id", (job_id,)).fetchall()]
+    checkpoints = [
+        row_dict(r)
+        for r in conn.execute(
+            "SELECT * FROM checkpoints WHERE job_id=? ORDER BY y_mm", (job_id,)
+        ).fetchall()
+    ]
+    events = [
+        row_dict(r)
+        for r in conn.execute(
+            "SELECT * FROM events WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchall()
+    ]
     conn.close()
     return jsonify(job=job, checkpoints=checkpoints, events=events)
 
@@ -289,16 +341,39 @@ def recommendation(job_id):
         rec, confidence, mode, reason = "RESTART", "none", "assisted", "No checkpoint exists."
         selected = None
     elif cp["confidence"] == "physically_confirmed":
-        rec, confidence, mode, reason = "CONTINUE", "high", "certified_candidate", "Physical position was confirmed; adapter validation is still required."
+        rec, confidence, mode, reason = (
+            "CONTINUE",
+            "high",
+            "certified_candidate",
+            "Physical position was confirmed; adapter validation is still required.",
+        )
         selected = cp["y_mm"]
     elif cp["confidence"] == "acknowledged":
-        rec, confidence, mode, reason = "TEST_FIRST", "medium", "assisted", "Printer acknowledgement exists, but physical output may include buffering."
+        rec, confidence, mode, reason = (
+            "TEST_FIRST",
+            "medium",
+            "assisted",
+            "Printer acknowledgement exists, but physical output may include buffering.",
+        )
         selected = cp["y_mm"]
     else:
-        rec, confidence, mode, reason = "TEST_FIRST", "low", "assisted", "Only host-side progress is known; use a registration strip or restart."
+        rec, confidence, mode, reason = (
+            "TEST_FIRST",
+            "low",
+            "assisted",
+            "Only host-side progress is known; use a registration strip or restart.",
+        )
         selected = cp["y_mm"]
     conn.close()
-    return jsonify(job_id=job_id, recommendation=rec, confidence=confidence, mode=mode, reason=reason, selected_y_mm=selected, overlap_mm=5)
+    return jsonify(
+        job_id=job_id,
+        recommendation=rec,
+        confidence=confidence,
+        mode=mode,
+        reason=reason,
+        selected_y_mm=selected,
+        overlap_mm=5,
+    )
 
 
 @app.post("/api/jobs/<job_id>/continuation")
@@ -321,7 +396,10 @@ def continuation(job_id):
                 raise ValueError("Image has no height")
             ratio = y_mm / max(float(job["media_length_mm"] or im.height), 1.0)
             start_px = int(max(0, min(im.height - 1, ratio * im.height)))
-            overlap_px = max(0, int(overlap_mm / max(float(job["media_length_mm"] or im.height), 1.0) * im.height))
+            overlap_px = max(
+                0,
+                int(overlap_mm / max(float(job["media_length_mm"] or im.height), 1.0) * im.height),
+            )
             crop_start = max(0, start_px - overlap_px)
             im.crop((0, crop_start, im.width, im.height)).save(output_path)
     except Exception as exc:
@@ -329,12 +407,33 @@ def continuation(job_id):
         return jsonify(error=f"Continuation generation failed: {exc}"), 400
     conn.execute(
         "INSERT INTO decisions(job_id,selected_y_mm,overlap_mm,mode,recommendation,confidence,operator_action,created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (job_id, y_mm, overlap_mm, "assisted", "TEST_FIRST", "operator_selected", "generated_continuation", now()),
+        (
+            job_id,
+            y_mm,
+            overlap_mm,
+            "assisted",
+            "TEST_FIRST",
+            "operator_selected",
+            "generated_continuation",
+            now(),
+        ),
     )
-    record_event(conn, job_id, "CONTINUATION_GENERATED", "recovery_engine", {"file": output_name, "y_mm": y_mm, "overlap_mm": overlap_mm})
+    record_event(
+        conn,
+        job_id,
+        "CONTINUATION_GENERATED",
+        "recovery_engine",
+        {"file": output_name, "y_mm": y_mm, "overlap_mm": overlap_mm},
+    )
     conn.commit()
     conn.close()
-    return jsonify(ok=True, file=output_name, url=f"/outputs/{output_name}", selected_y_mm=y_mm, overlap_mm=overlap_mm)
+    return jsonify(
+        ok=True,
+        file=output_name,
+        url=f"/outputs/{output_name}",
+        selected_y_mm=y_mm,
+        overlap_mm=overlap_mm,
+    )
 
 
 @app.get("/outputs/<path:name>")

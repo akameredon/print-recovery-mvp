@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+
 import requests
 
 BASE = "http://127.0.0.1:5173"
@@ -16,4 +17,10 @@ assert record["severity"] in {"INFO", "WARNING", "ERROR", "DEBUG"}
 assert record["module"] == "print_recovery"
 assert record["correlation_id"] == "day2-test-correlation"
 assert "timestamp" in record
-print({"status": "passed", "correlation_id": record["correlation_id"], "log_records_checked": len(records)})
+print(
+    {
+        "status": "passed",
+        "correlation_id": record["correlation_id"],
+        "log_records_checked": len(records),
+    }
+)

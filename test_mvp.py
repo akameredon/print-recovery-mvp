@@ -1,6 +1,7 @@
 from pathlib import Path
-from PIL import Image, ImageDraw
+
 import requests
+from PIL import Image, ImageDraw
 
 BASE = "http://127.0.0.1:5173"
 root = Path(__file__).resolve().parent
@@ -30,14 +31,21 @@ with sample.open("rb") as fh:
 assert response.status_code == 302, response.text
 
 html = requests.get(BASE + "/").text
-marker = "data-job=\""
-job_id = html.split(marker, 1)[1].split("\"", 1)[0]
+marker = 'data-job="'
+job_id = html.split(marker, 1)[1].split('"', 1)[0]
 
-assert requests.post(BASE + f"/api/jobs/{job_id}/checkpoint", json={"y_mm": 150, "band_mm": 5, "evidence": "transmitted"}).ok
-assert requests.post(BASE + f"/api/jobs/{job_id}/interrupt", json={"event_type": "POWER_OR_PROTECTION_TRIP"}).ok
+assert requests.post(
+    BASE + f"/api/jobs/{job_id}/checkpoint",
+    json={"y_mm": 150, "band_mm": 5, "evidence": "transmitted"},
+).ok
+assert requests.post(
+    BASE + f"/api/jobs/{job_id}/interrupt", json={"event_type": "POWER_OR_PROTECTION_TRIP"}
+).ok
 recommendation = requests.get(BASE + f"/api/jobs/{job_id}/recommendation").json()
 assert recommendation["recommendation"] == "TEST_FIRST"
-continuation = requests.post(BASE + f"/api/jobs/{job_id}/continuation", json={"y_mm": 150, "overlap_mm": 5})
+continuation = requests.post(
+    BASE + f"/api/jobs/{job_id}/continuation", json={"y_mm": 150, "overlap_mm": 5}
+)
 assert continuation.ok, continuation.text
 output = root / "outputs" / continuation.json()["file"]
 assert output.exists() and output.stat().st_size > 0

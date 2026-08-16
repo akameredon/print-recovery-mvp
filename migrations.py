@@ -7,8 +7,7 @@ Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
 
 def migration_1_initial_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY,
             file_name TEXT NOT NULL,
@@ -60,19 +59,16 @@ def migration_1_initial_schema(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             FOREIGN KEY(job_id) REFERENCES jobs(id)
         );
-        """
-    )
+        """)
 
 
 def migration_2_add_indexes(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs(updated_at);
         CREATE INDEX IF NOT EXISTS idx_checkpoints_job_y ON checkpoints(job_id, y_mm);
         CREATE INDEX IF NOT EXISTS idx_events_job_id ON events(job_id, id);
         CREATE INDEX IF NOT EXISTS idx_decisions_job_id ON decisions(job_id, id);
-        """
-    )
+        """)
 
 
 MIGRATIONS: list[Migration] = [
@@ -82,15 +78,13 @@ MIGRATIONS: list[Migration] = [
 
 
 def run_migrations(conn: sqlite3.Connection) -> list[tuple[int, str]]:
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
-        """
-    )
+        """)
     applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
     applied_now: list[tuple[int, str]] = []
     for version, name, migration in MIGRATIONS:
@@ -104,4 +98,6 @@ def run_migrations(conn: sqlite3.Connection) -> list[tuple[int, str]]:
 
 
 def applied_versions(conn: sqlite3.Connection) -> list[int]:
-    return [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
+    return [
+        row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")
+    ]

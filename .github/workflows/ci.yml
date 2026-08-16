@@ -23,7 +23,13 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt && pip install black ruff
+
+      - name: Check formatting
+        run: black --check app.py config.py logging_utils.py migrations.py test_*.py
+
+      - name: Run static analysis
+        run: ruff check app.py config.py logging_utils.py migrations.py test_*.py
 
       - name: Compile Python sources
         run: python -m py_compile app.py config.py logging_utils.py migrations.py

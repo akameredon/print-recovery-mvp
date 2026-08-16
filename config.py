@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-
 DEFAULTS: dict[str, Any] = {
     "data_dir": "data",
     "output_dir": "outputs",
