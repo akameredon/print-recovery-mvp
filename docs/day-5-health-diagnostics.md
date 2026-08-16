@@ -12,7 +12,7 @@ A healthy response returns HTTP 200. If the database schema is incomplete, a pat
 
 ## Verification evidence
 
-The Day 5 diagnostics test passed with HTTP 200, status `ok`, schema versions `[1, 2]`, writable paths and propagated correlation IDs. The migration, configuration, logging and full recovery smoke tests also passed after restarting the application with the new routes.
+The Day 5 diagnostics test passed with HTTP 200, status `ok`, schema versions `[1, 2, 3]`, writable paths and propagated correlation IDs. The migration, configuration, logging and full recovery smoke tests also passed after restarting the application with the new routes.
 
 ## Limitation
 

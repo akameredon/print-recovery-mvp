@@ -71,9 +71,26 @@ def migration_2_add_indexes(conn: sqlite3.Connection) -> None:
         """)
 
 
+def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS job_status_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            from_status TEXT,
+            to_status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES jobs(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_status_history_job_id ON job_status_history(job_id, id);
+        """)
+
+
 MIGRATIONS: list[Migration] = [
     (1, "initial_schema", migration_1_initial_schema),
     (2, "add_operational_indexes", migration_2_add_indexes),
+    (3, "add_job_status_history", migration_3_add_status_history),
 ]
 
 

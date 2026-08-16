@@ -136,6 +136,22 @@ def record_event(conn, job_id, event_type, source, payload):
     )
 
 
+def record_status_transition(conn, job_id, to_status, reason, source, force=False):
+    current = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not current:
+        return False
+    from_status = current["status"]
+    if from_status == to_status and not force:
+        return False
+    conn.execute(
+        "INSERT INTO job_status_history(job_id,from_status,to_status,reason,source,created_at) VALUES(?,?,?,?,?,?)",
+        (job_id, from_status, to_status, reason, source, now()),
+    )
+    conn.execute("UPDATE jobs SET status=?,updated_at=? WHERE id=?", (to_status, now(), job_id))
+    logger.info("job_status_transition", extra={"job_id": job_id, "event_type": to_status})
+    return True
+
+
 def latest_checkpoint(conn, job_id):
     return conn.execute(
         "SELECT * FROM checkpoints WHERE job_id=? ORDER BY y_mm DESC, id DESC LIMIT 1", (job_id,)
@@ -254,6 +270,10 @@ def create_job():
             now(),
         ),
     )
+    conn.execute(
+        "INSERT INTO job_status_history(job_id,from_status,to_status,reason,source,created_at) VALUES(?,?,?,?,?,?)",
+        (job_id, None, "READY", "job_created", "operator", now()),
+    )
     record_event(
         conn, job_id, "JOB_CREATED", "operator", {"file_name": safe_name, "source_hash": digest}
     )
@@ -282,7 +302,7 @@ def checkpoint(job_id):
         "INSERT INTO checkpoints(job_id,y_mm,band_mm,state,evidence,confidence,created_at) VALUES(?,?,?,?,?,?,?)",
         (job_id, y_mm, band_mm, state, evidence, confidence, now()),
     )
-    conn.execute("UPDATE jobs SET status=?,updated_at=? WHERE id=?", ("PRINTING", now(), job_id))
+    record_status_transition(conn, job_id, "PRINTING", "checkpoint_recorded", "operator_or_adapter")
     record_event(
         conn, job_id, "CHECKPOINT", "operator_or_adapter", {"y_mm": y_mm, "evidence": evidence}
     )
@@ -299,7 +319,7 @@ def interrupt(job_id):
     source = payload.get("source", "operator")
     note = payload.get("note", "")
     conn = db()
-    conn.execute("UPDATE jobs SET status=?,updated_at=? WHERE id=?", ("INTERRUPTED", now(), job_id))
+    record_status_transition(conn, job_id, "INTERRUPTED", event_type, source)
     record_event(conn, job_id, event_type, source, {"note": note})
     conn.commit()
     conn.close()
@@ -325,8 +345,14 @@ def job_detail(job_id):
             "SELECT * FROM events WHERE job_id=? ORDER BY id", (job_id,)
         ).fetchall()
     ]
+    status_history = [
+        row_dict(r)
+        for r in conn.execute(
+            "SELECT * FROM job_status_history WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchall()
+    ]
     conn.close()
-    return jsonify(job=job, checkpoints=checkpoints, events=events)
+    return jsonify(job=job, checkpoints=checkpoints, events=events, status_history=status_history)
 
 
 @app.get("/api/jobs/<job_id>/recommendation")
@@ -417,6 +443,9 @@ def continuation(job_id):
             "generated_continuation",
             now(),
         ),
+    )
+    record_status_transition(
+        conn, job_id, "RECOVERY_READY", "continuation_generated", "recovery_engine"
     )
     record_event(
         conn,
