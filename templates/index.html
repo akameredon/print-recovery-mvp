@@ -88,7 +88,9 @@
           <label>Checkpoint y-coordinate (mm)<input id="y-{{job.id}}" type="number" step="0.1" value="100"></label>
           <label>Evidence<select id="e-{{job.id}}"><option value="prepared">Prepared</option><option value="transmitted" selected>Transmitted</option><option value="acknowledged">Acknowledged</option><option value="physical">Physically confirmed</option></select></label>
           <button onclick="checkpoint('{{job.id}}')">Record checkpoint</button>
-          <button class="warning" onclick="interrupt('{{job.id}}')">Mark unexpected interruption</button>
+          <label>Interruption reason<select id="reason-{{job.id}}"><option value="POWER_LOSS">Power loss</option><option value="PROTECTION_TRIP">Lightning/protection trip</option><option value="COMMUNICATION_LOSS">Communication loss</option><option value="PRINTER_ERROR">Printer error</option><option value="MATERIAL_ISSUE">Material issue</option><option value="OPERATOR_ABORT">Operator abort</option><option value="UNKNOWN">Unknown</option></select></label>
+          <label>Interruption note<textarea id="note-{{job.id}}" rows="2" placeholder="What happened? Optional, max 1000 characters"></textarea></label>
+          <button class="warning" onclick="interrupt('{{job.id}}')">Record interruption</button>
         </div>
         <div>
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
@@ -118,7 +120,9 @@ async function checkpoint(id) {
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
 }
 async function interrupt(id) {
-  const r = await fetch('/api/jobs/'+id+'/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({event_type:'POWER_OR_PROTECTION_TRIP',source:'operator',note:'Prototype test interruption'})});
+  const reason = document.getElementById('reason-'+id).value;
+  const note = document.getElementById('note-'+id).value;
+  const r = await fetch('/api/jobs/'+id+'/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason,source:'operator',note})});
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
   setTimeout(()=>location.reload(), 300);
 }

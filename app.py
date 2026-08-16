@@ -227,6 +227,17 @@ def diagnostics():
     return jsonify(snapshot)
 
 
+INTERRUPTION_REASONS = {
+    "POWER_LOSS",
+    "PROTECTION_TRIP",
+    "COMMUNICATION_LOSS",
+    "PRINTER_ERROR",
+    "MATERIAL_ISSUE",
+    "OPERATOR_ABORT",
+    "UNKNOWN",
+}
+
+
 JOB_FILTERS = {
     "all": None,
     "active": ("READY", "PRINTING", "RECOVERY_READY", "RECOVERING"),
@@ -399,15 +410,36 @@ def checkpoint(job_id):
 def interrupt(job_id):
     logger.warning("interruption_received", extra={"job_id": job_id})
     payload = request.get_json(silent=True) or request.form
-    event_type = payload.get("event_type", "UNKNOWN_INTERRUPTION")
-    source = payload.get("source", "operator")
-    note = payload.get("note", "")
+    reason = str(payload.get("reason", "UNKNOWN")).strip().upper()
+    if reason not in INTERRUPTION_REASONS:
+        return error_response(
+            "reason must be one of: " + ", ".join(sorted(INTERRUPTION_REASONS)),
+            400,
+            "INVALID_INTERRUPTION_REASON",
+        )
+    source = str(payload.get("source", "operator")).strip() or "operator"
+    note = str(payload.get("note", "")).strip()
+    if len(note) > 1000:
+        return error_response(
+            "note must be 1000 characters or fewer", 400, "INVALID_INTERRUPTION_NOTE"
+        )
+    event_type = str(payload.get("event_type", reason)).strip() or reason
     conn = db()
+    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
     record_status_transition(conn, job_id, "INTERRUPTED", event_type, source)
-    record_event(conn, job_id, event_type, source, {"note": note})
+    record_event(
+        conn,
+        job_id,
+        event_type,
+        source,
+        {"reason": reason, "note": note},
+    )
     conn.commit()
     conn.close()
-    return jsonify(ok=True, status="INTERRUPTED")
+    return jsonify(ok=True, status="INTERRUPTED", reason=reason, note=note)
 
 
 @app.get("/api/jobs/<job_id>")
