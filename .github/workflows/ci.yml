@@ -1,0 +1,58 @@
+name: Print Recovery MVP CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Compile Python sources
+        run: python -m py_compile app.py config.py logging_utils.py migrations.py
+
+      - name: Run isolated tests
+        run: |
+          python test_models.py
+          python test_migrations.py
+          python test_config.py
+
+      - name: Start application for HTTP tests
+        run: |
+          python app.py > /tmp/print-recovery-mvp.log 2>&1 &
+          echo $! > /tmp/print-recovery-mvp.pid
+          sleep 2
+
+      - name: Run HTTP and recovery tests
+        run: |
+          python test_logging.py
+          python test_diagnostics.py
+          python test_error_handling.py
+          python test_mvp.py
+
+      - name: Upload application log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-recovery-mvp-log
+          path: |
+            /tmp/print-recovery-mvp.log
+            data/print_recovery.log
+          if-no-files-found: ignore
