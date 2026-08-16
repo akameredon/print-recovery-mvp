@@ -34,6 +34,7 @@ from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
 from output_naming import continuation_output_name
+from recovery_report import render_recovery_report
 from recovery_safety import assess_recovery_safety
 from registration_strip import generate_registration_strip
 
@@ -680,6 +681,98 @@ def recovery_readiness(job_id):
     }
     conn.close()
     return jsonify(response)
+
+
+@app.get("/api/jobs/<job_id>/recovery-report")
+def recovery_report(job_id):
+    output_format = request.args.get("format", "json").lower()
+    if output_format not in {"json", "md", "markdown"}:
+        return error_response("format must be json or md", 400, "INVALID_REPORT_FORMAT")
+    conn = db()
+    job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    source_path = Path(job["source_path"])
+    source_exists = source_path.exists()
+    actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_exists else None
+    integrity = (
+        "missing"
+        if not source_exists
+        else ("verified" if actual_hash == job["source_hash"] else "changed")
+    )
+    checkpoint = latest_checkpoint(conn, job_id)
+    checkpoint_dict = row_dict(checkpoint)
+    checkpoint_confidence = (
+        calculate_checkpoint_confidence(checkpoint_dict) if checkpoint_dict else None
+    )
+    decision = conn.execute(
+        "SELECT * FROM decisions WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,)
+    ).fetchone()
+    decision_dict = row_dict(decision)
+    selected_coordinate = None
+    if decision_dict:
+        selected_coordinate = {
+            "y_mm": decision_dict.get("selected_y_mm"),
+            "overlap_mm": decision_dict.get("overlap_mm"),
+            "source": "decision",
+        }
+    elif checkpoint_dict:
+        selected_coordinate = {
+            "y_mm": checkpoint_dict.get("y_mm"),
+            "overlap_mm": None,
+            "source": "checkpoint",
+        }
+    interruption = None
+    operator_review = None
+    for row in conn.execute(
+        "SELECT * FROM events WHERE job_id=? ORDER BY id", (job_id,)
+    ).fetchall():
+        try:
+            details = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            details = {}
+        if details.get("classification"):
+            interruption = {
+                "event_type": row["event_type"],
+                "timestamp": row["created_at"],
+                "details": details,
+            }
+        if row["event_type"] == "RECOVERY_REVIEWED":
+            operator_review = {"timestamp": row["created_at"], **details}
+    safety = assess_recovery_safety(
+        source_integrity=integrity,
+        has_checkpoint=checkpoint is not None,
+        has_interruption=interruption is not None,
+    )
+    if safety["blockers"]:
+        readiness = "blocked"
+    elif safety["warnings"]:
+        readiness = "review_required"
+    else:
+        readiness = "ready_for_operator_review"
+    report = {
+        "job_id": job_id,
+        "file_name": job["file_name"],
+        "generated_at": now(),
+        "readiness": readiness,
+        "selected_coordinate": selected_coordinate,
+        "confidence": checkpoint_confidence,
+        "source_integrity": {
+            "status": integrity,
+            "expected_hash": job["source_hash"],
+            "actual_hash": actual_hash,
+        },
+        "checkpoint": checkpoint_dict,
+        "interruption": interruption,
+        "operator_review": operator_review,
+        "decision": decision_dict,
+        "recovery_safety": safety,
+    }
+    conn.close()
+    if output_format in {"md", "markdown"}:
+        return Response(render_recovery_report(report), mimetype="text/markdown")
+    return jsonify(report)
 
 
 @app.get("/api/jobs/<job_id>/timeline")
