@@ -358,6 +358,48 @@ def job_detail(job_id):
     return jsonify(job=job, checkpoints=checkpoints, events=events, status_history=status_history)
 
 
+@app.get("/api/jobs/<job_id>/integrity")
+def source_integrity(job_id):
+    conn = db()
+    job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    source_path = Path(job["source_path"])
+    if not source_path.exists():
+        status = "missing"
+        actual_hash = None
+        record_event(conn, job_id, "SOURCE_MISSING", "integrity_checker", {})
+        logger.warning("source_integrity_missing", extra={"job_id": job_id})
+        response_code = 404
+    else:
+        actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        status = "verified" if actual_hash == job["source_hash"] else "changed"
+        event_type = "SOURCE_VERIFIED" if status == "verified" else "SOURCE_CHANGED"
+        record_event(conn, job_id, event_type, "integrity_checker", {"status": status})
+        if status == "changed":
+            logger.warning("source_integrity_changed", extra={"job_id": job_id})
+        response_code = 200 if status == "verified" else 409
+    conn.commit()
+    conn.close()
+    body = {
+        "job_id": job_id,
+        "file_name": job["file_name"],
+        "status": status,
+        "expected_hash": job["source_hash"],
+        "actual_hash": actual_hash,
+    }
+    if status != "verified":
+        body["error"] = "SOURCE_MISSING" if status == "missing" else "SOURCE_CHANGED"
+        body["message"] = (
+            "The stored source file is missing."
+            if status == "missing"
+            else "The stored source file hash does not match the recorded job hash."
+        )
+        body["correlation_id"] = g.get("correlation_id", "-")
+    return jsonify(body), response_code
+
+
 @app.get("/api/jobs/<job_id>/status-history")
 def status_history(job_id):
     try:
