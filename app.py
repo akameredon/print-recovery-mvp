@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -11,6 +13,7 @@ from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     g,
     jsonify,
     redirect,
@@ -393,6 +396,40 @@ def status_history(job_id):
         pages=pages,
         has_next=page < pages,
         has_previous=page > 1 and pages > 0,
+    )
+
+
+@app.get("/api/jobs/<job_id>/status-history/export")
+def export_status_history(job_id):
+    export_format = request.args.get("format", "json").lower()
+    if export_format not in {"json", "csv"}:
+        return error_response("format must be json or csv", 400, "INVALID_EXPORT_FORMAT")
+    conn = db()
+    job_exists = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job_exists:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    rows = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT * FROM job_status_history WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchall()
+    ]
+    conn.close()
+    filename = f"{job_id}_status_history.{export_format}"
+    if export_format == "json":
+        response = jsonify(job_id=job_id, items=rows, total=len(rows), format="json")
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+    buffer = io.StringIO()
+    fieldnames = ["id", "job_id", "from_status", "to_status", "reason", "source", "created_at"]
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows({key: row.get(key) for key in fieldnames} for row in rows)
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
