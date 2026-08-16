@@ -42,10 +42,11 @@ event_type, payload = conn.execute(
 ).fetchone()
 conn.close()
 assert event_type == "PROTECTION_TRIP"
-assert json.loads(payload) == {
-    "reason": "PROTECTION_TRIP",
-    "note": "Lightning protection opened the machine safety switch.",
-}
+stored_payload = json.loads(payload)
+assert stored_payload["reason"] == "PROTECTION_TRIP"
+assert stored_payload["note"] == "Lightning protection opened the machine safety switch."
+assert stored_payload["classification"]["classification"] == "outage"
+assert stored_payload["classification"]["source"] == "operator"
 
 invalid = requests.post(BASE + f"/api/jobs/{job_id}/interrupt", json={"reason": "NOT_A_REASON"})
 assert invalid.status_code == 400
