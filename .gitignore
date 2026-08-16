@@ -9,4 +9,5 @@ data/*
 outputs/*
 !outputs/.gitkeep
 *.zip
+sample_test_job.png
 .DS_Store
