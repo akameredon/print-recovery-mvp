@@ -26,6 +26,7 @@ from PIL import Image
 from werkzeug.exceptions import HTTPException
 
 from adapters import SimulatedAdapter
+from checkpoint_confidence import calculate_checkpoint_confidence
 from config import load_config, resolve_path
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
@@ -476,11 +477,20 @@ def checkpoint(job_id):
     )
     conn.commit()
     conn.close()
+    confidence_rules = calculate_checkpoint_confidence(
+        {
+            "evidence": evidence,
+            "y_mm": y_mm,
+            "logical_band": logical_band,
+            "pass_number": pass_number,
+        }
+    )
     return jsonify(
         ok=True,
         job_id=job_id,
         y_mm=y_mm,
         confidence=confidence,
+        confidence_rules=confidence_rules,
         checkpoint_interval_mm=interval_mm,
         logical_band=logical_band,
         pass_number=pass_number,
@@ -617,6 +627,9 @@ def recovery_readiness(job_id):
     ).fetchone()
     checkpoint_dict = row_dict(checkpoint)
     interruption_dict = row_dict(interruption)
+    checkpoint_confidence = (
+        calculate_checkpoint_confidence(checkpoint_dict) if checkpoint_dict else None
+    )
 
     if integrity != "verified":
         readiness = "blocked"
@@ -642,6 +655,7 @@ def recovery_readiness(job_id):
             "actual_hash": actual_hash,
         },
         "checkpoint": checkpoint_dict,
+        "checkpoint_confidence": checkpoint_confidence,
         "interruption": interruption_dict,
         "operator_confirmation_required": True,
         "request_correlation_id": g.get("correlation_id", "-"),
