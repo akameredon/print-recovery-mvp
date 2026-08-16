@@ -11,6 +11,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, url_for
 from PIL import Image
+from werkzeug.exceptions import HTTPException
 
 from config import load_config, resolve_path
 from logging_utils import configure_logging, set_correlation_id
@@ -48,12 +49,35 @@ def finish_request(response):
     return response
 
 
+def wants_json_error() -> bool:
+    return request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json"
+
+
+def error_response(message: str, status_code: int, error_code: str):
+    payload = {
+        "error": error_code,
+        "message": message,
+        "status": status_code,
+        "correlation_id": g.get("correlation_id", "-"),
+    }
+    if wants_json_error():
+        return jsonify(payload), status_code
+    return render_template("error.html", **payload), status_code
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(error):
+    logger.warning(
+        "http_error",
+        extra={"route": request.path, "status_code": error.code},
+    )
+    return error_response(error.description, error.code or 500, error.name.upper().replace(" ", "_"))
+
+
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
     logger.exception("unhandled_exception", extra={"route": request.path, "status_code": 500})
-    if request.path.startswith("/api/"):
-        return jsonify(error="Internal server error", correlation_id=g.get("correlation_id", "-")), 500
-    return "Internal server error", 500
+    return error_response("Internal server error. Use the correlation ID when requesting support.", 500, "INTERNAL_ERROR")
 
 
 def now() -> str:
