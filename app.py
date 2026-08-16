@@ -133,14 +133,30 @@ def row_dict(row):
 
 
 def record_event(conn, job_id, event_type, source, payload):
+    serialized_payload = json.dumps(payload, sort_keys=True)
+    previous = conn.execute(
+        "SELECT event_type,source,payload FROM events WHERE job_id=? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if previous and (previous["event_type"], previous["source"], previous["payload"]) == (
+        event_type,
+        source,
+        serialized_payload,
+    ):
+        logger.info(
+            "duplicate_domain_event_suppressed",
+            extra={"job_id": job_id, "event_type": event_type},
+        )
+        return False
     conn.execute(
         "INSERT INTO events(job_id,event_type,source,payload,created_at) VALUES(?,?,?,?,?)",
-        (job_id, event_type, source, json.dumps(payload), now()),
+        (job_id, event_type, source, serialized_payload, now()),
     )
     logger.info(
         "domain_event_recorded",
         extra={"job_id": job_id, "event_type": event_type},
     )
+    return True
 
 
 def record_status_transition(conn, job_id, to_status, reason, source, force=False):
