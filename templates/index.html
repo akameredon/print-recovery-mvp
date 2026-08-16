@@ -87,8 +87,10 @@
         </div>
         <div>
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
+          <button class="secondary" onclick="timeline('{{job.id}}')">Show evidence timeline</button>
           <button onclick="generate('{{job.id}}')">Generate continuation from selected y</button>
           <pre id="out-{{job.id}}">No recovery analysis yet.</pre>
+          <pre id="timeline-{{job.id}}" hidden>No timeline loaded.</pre>
         </div>
       </div>
     </div>
@@ -109,6 +111,16 @@ async function interrupt(id) {
 async function recommend(id) {
   const r = await fetch('/api/jobs/'+id+'/recommendation');
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
+}
+async function timeline(id) {
+  const r = await fetch('/api/jobs/'+id+'/timeline?limit=100');
+  const body = await r.json();
+  const target = document.getElementById('timeline-'+id);
+  target.hidden = false;
+  target.textContent = body.items ? body.items.map((item, index) => {
+    const details = JSON.stringify(item.details);
+    return (index + 1) + '. ' + item.timestamp + ' | ' + item.kind + ' | ' + item.event + ' | ' + details;
+  }).join('\\n') : JSON.stringify(body, null, 2);
 }
 async function generate(id) {
   const y = document.getElementById('y-'+id).value;
