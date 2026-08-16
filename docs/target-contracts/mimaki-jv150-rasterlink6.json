@@ -1,0 +1,27 @@
+{
+  "contract_version": "1.0",
+  "status": "proposed_requires_operator_signoff",
+  "manufacturer": "Mimaki",
+  "printer_model": "JV150-series",
+  "rip_name": "RasterLink6",
+  "rip_version": "TO_BE_CONFIRMED",
+  "connection_mode": "TO_BE_CONFIRMED",
+  "job_input_path": "TO_BE_CONFIRMED",
+  "job_output_or_hotfolder": "TO_BE_CONFIRMED",
+  "observable_signals": [
+    "host_job_created",
+    "host_transmission_started",
+    "host_transmission_completed",
+    "operator_checkpoint",
+    "operator_interruption_reason"
+  ],
+  "physical_validation_required": [
+    "exact printer model and firmware",
+    "exact RasterLink6 version",
+    "connection or hot-folder path",
+    "available queue and progress signals",
+    "controlled pause and power-interruption test results"
+  ],
+  "recovery_mode": "assisted_only",
+  "notes": "Candidate contract for Day 51. It is not a certified integration and must be signed off using a real machine, RIP version and sample job."
+}
