@@ -1,0 +1,58 @@
+{
+  "suite": "day50_synthetic_interruptions",
+  "generated_at": "2026-08-16T23:47:19.563021+00:00",
+  "status": "passed",
+  "scenario_count": 10,
+  "source": "synthetic local API workflow",
+  "results": [
+    {
+      "scenario": "POWER_LOSS",
+      "status": "passed",
+      "classification": "outage"
+    },
+    {
+      "scenario": "PROTECTION_TRIP",
+      "status": "passed",
+      "classification": "outage"
+    },
+    {
+      "scenario": "PRINTER_ERROR",
+      "status": "passed",
+      "classification": "crash"
+    },
+    {
+      "scenario": "OPERATOR_ABORT",
+      "status": "passed",
+      "classification": "abort"
+    },
+    {
+      "scenario": "COMMUNICATION_LOSS",
+      "status": "passed",
+      "classification": "communication_loss"
+    },
+    {
+      "scenario": "MATERIAL_ISSUE",
+      "status": "passed",
+      "classification": "material_issue"
+    },
+    {
+      "scenario": "UNKNOWN",
+      "status": "passed",
+      "classification": "unknown"
+    },
+    {
+      "scenario": "SUCCESSFUL_ASSISTED_RECOVERY",
+      "status": "passed"
+    },
+    {
+      "scenario": "MISSING_CHECKPOINT",
+      "status": "passed",
+      "blocked": true
+    },
+    {
+      "scenario": "CHANGED_SOURCE",
+      "status": "passed",
+      "blocked": true
+    }
+  ]
+}
