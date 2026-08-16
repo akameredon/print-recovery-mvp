@@ -22,7 +22,7 @@ from flask import (
     send_from_directory,
     url_for,
 )
-from PIL import Image
+from PIL import Image, ImageDraw
 from werkzeug.exceptions import HTTPException
 
 from adapters import SimulatedAdapter
@@ -956,6 +956,77 @@ def recommendation(job_id):
         reason=reason,
         selected_y_mm=selected,
         overlap_mm=5,
+    )
+
+
+@app.get("/api/jobs/<job_id>/continuation-preview")
+def continuation_preview(job_id):
+    conn = db()
+    job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    checkpoint = latest_checkpoint(conn, job_id)
+    conn.close()
+    try:
+        selected_y_mm = float(request.args.get("y_mm", checkpoint["y_mm"] if checkpoint else 0))
+        overlap_mm = float(request.args.get("overlap_mm", 5))
+        if selected_y_mm < 0 or overlap_mm < 0:
+            raise ValueError("y_mm and overlap_mm must be non-negative")
+        source_path = Path(job["source_path"])
+        with Image.open(source_path) as source:
+            if source.height <= 0 or source.width <= 0:
+                raise ValueError("Image has no usable dimensions")
+            media_length_mm = max(float(job["media_length_mm"] or source.height), 1.0)
+            selected_px = int(
+                max(0, min(source.height, selected_y_mm / media_length_mm * source.height))
+            )
+            overlap_px = int(overlap_mm / media_length_mm * source.height)
+            uncertain_start_px = max(0, selected_px - overlap_px)
+            uncertain_end_px = min(source.height, selected_px + overlap_px)
+            preview_width = min(720, source.width)
+            preview_height = max(1, int(source.height * preview_width / source.width))
+            preview = source.convert("RGBA").resize((preview_width, preview_height))
+            overlay = Image.new("RGBA", preview.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay)
+            scale = preview_height / source.height
+            regions = [
+                ("printed", 0, uncertain_start_px, (31, 122, 77, 92)),
+                ("uncertain", uncertain_start_px, uncertain_end_px, (214, 139, 0, 120)),
+                ("remaining", uncertain_end_px, source.height, (20, 93, 160, 92)),
+            ]
+            region_output = []
+            for label, start_px, end_px, color in regions:
+                top = int(start_px * scale)
+                bottom = max(top + (1 if end_px > start_px else 0), int(end_px * scale))
+                if end_px > start_px:
+                    draw.rectangle((0, top, preview_width, bottom), fill=color)
+                region_output.append(
+                    {
+                        "label": label,
+                        "start_y_mm": round(start_px / source.height * media_length_mm, 2),
+                        "end_y_mm": round(end_px / source.height * media_length_mm, 2),
+                        "present": end_px > start_px,
+                    }
+                )
+            selected_line = int(selected_px * scale)
+            draw.line(
+                (0, selected_line, preview_width, selected_line), fill=(166, 35, 35, 255), width=2
+            )
+            preview = Image.alpha_composite(preview, overlay).convert("RGB")
+            preview_name = f"{job_id}_continuation_preview_{selected_y_mm:.1f}mm.png"
+            preview.save(OUTPUT_DIR / preview_name)
+    except (OSError, TypeError, ValueError) as error:
+        return error_response(f"Continuation preview failed: {error}", 400, "PREVIEW_FAILED")
+    return jsonify(
+        ok=True,
+        job_id=job_id,
+        selected_y_mm=selected_y_mm,
+        overlap_mm=overlap_mm,
+        regions=region_output,
+        preview_file=preview_name,
+        preview_url=f"/outputs/{preview_name}",
+        operator_confirmation_required=True,
     )
 
 

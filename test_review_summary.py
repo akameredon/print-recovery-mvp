@@ -82,7 +82,10 @@ with no_decision_source.open("rb") as image_file:
     )
 assert no_decision_created.status_code == 302
 conn = sqlite3.connect("data/print_recovery.sqlite3")
-no_decision_id = conn.execute("SELECT id FROM jobs ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+no_decision_id = conn.execute(
+    "SELECT id FROM jobs WHERE file_name=? ORDER BY created_at DESC LIMIT 1",
+    ("no-decision.png",),
+).fetchone()[0]
 conn.close()
 no_decision = requests.get(BASE + f"/api/jobs/{no_decision_id}/review")
 assert no_decision.status_code == 409

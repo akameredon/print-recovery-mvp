@@ -26,6 +26,8 @@
     .confidence-badge { border:1px solid #c9d4df; border-radius:999px; padding:4px 8px; font-size:.78rem; background:#eef2f6; color:#617080; }
     .confidence-badge.seen { background:#dff3e8; border-color:#74b88e; color:#185c36; font-weight:700; }
     .review-panel { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#fffaf0; }
+    .continuation-preview { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
+    .continuation-preview img { max-width:100%; height:auto; display:block; border:1px solid #c9d4df; }
     .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
     .action-card { border:2px solid #dce3ea; border-radius:7px; padding:8px; background:#f7fafc; color:#617080; }
     .action-card.recommended { border-color:#1f7a4d; background:#dff3e8; color:#185c36; font-weight:700; }
@@ -136,6 +138,7 @@
             <span class="confidence-badge" data-level="acknowledged">Acknowledged</span>
             <span class="confidence-badge" data-level="physically_confirmed">Physically confirmed</span>
           </div>
+          <button class="secondary" onclick="preview('{{job.id}}')">Preview recovery regions</button>
           <button onclick="generate('{{job.id}}')">Generate continuation from selected y</button>
           <div id="actions-{{job.id}}" class="action-cards" aria-label="Recovery actions">
             <div class="action-card" data-action="CONTINUE">Continue<small>Use the proposed continuation after approval.</small></div>
@@ -145,6 +148,7 @@
           <pre id="out-{{job.id}}" aria-live="polite">No recovery analysis yet.</pre>
           <pre id="timeline-{{job.id}}" aria-live="polite" hidden>No timeline loaded.</pre>
           <div id="map-{{job.id}}" class="checkpoint-map" hidden></div>
+          <div id="preview-{{job.id}}" class="continuation-preview" hidden aria-live="polite"></div>
           <div id="review-{{job.id}}" class="review-panel" hidden>
             <strong>Operator approval required</strong>
             <p id="review-state-{{job.id}}">Review state not loaded.</p>
@@ -232,6 +236,16 @@ async function submitReview(id, action) {
   const r = await fetch('/api/jobs/'+id+'/review', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, note})});
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
   await openReview(id);
+}
+async function preview(id) {
+  const y = document.getElementById('y-'+id).value;
+  const r = await fetch('/api/jobs/'+id+'/continuation-preview?y_mm='+encodeURIComponent(y)+'&overlap_mm=5');
+  const body = await r.json();
+  const target = document.getElementById('preview-'+id);
+  target.hidden = false;
+  if (!r.ok) { target.textContent = JSON.stringify(body, null, 2); return; }
+  const rows = body.regions.map(region => '<tr><th>'+region.label+'</th><td>'+region.start_y_mm+'–'+region.end_y_mm+' mm</td><td>'+ (region.present ? 'present' : 'empty') +'</td></tr>').join('');
+  target.innerHTML = '<strong>Continuation preview</strong><p>Printed is green, uncertain overlap is amber, and remaining is blue. The red line marks the selected coordinate.</p><img src="'+body.preview_url+'" alt="Continuation preview showing printed, uncertain and remaining regions"><table><thead><tr><th>Region</th><th>Range</th><th>Status</th></tr></thead><tbody>'+rows+'</tbody></table><p class="muted">This is a review preview only. Operator confirmation is still required.</p>';
 }
 async function generate(id) {
   const y = document.getElementById('y-'+id).value;
