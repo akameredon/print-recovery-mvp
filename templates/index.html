@@ -19,6 +19,9 @@
     .status { font-weight: 700; } .status.INTERRUPTED { color:#a33a2b; } .status.PRINTING { color:#145da0; }
     .checkpoint-map { margin-top: 10px; background:#f7fafc; border:1px solid #dce3ea; border-radius:7px; padding:8px; }
     .checkpoint-map svg { width:100%; height:180px; display:block; }
+    .confidence-badges { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .confidence-badge { border:1px solid #c9d4df; border-radius:999px; padding:4px 8px; font-size:.78rem; background:#eef2f6; color:#617080; }
+    .confidence-badge.seen { background:#dff3e8; border-color:#74b88e; color:#185c36; font-weight:700; }
     pre { white-space: pre-wrap; background:#101820; color:#dce9f3; padding:12px; border-radius:7px; min-height: 80px; }
   </style>
 </head>
@@ -91,6 +94,13 @@
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
           <button class="secondary" onclick="timeline('{{job.id}}')">Show evidence timeline</button>
           <button class="secondary" onclick="checkpointMap('{{job.id}}')">Show checkpoint map</button>
+          <button class="secondary" onclick="confidenceBadges('{{job.id}}')">Refresh evidence confidence</button>
+          <div id="confidence-{{job.id}}" class="confidence-badges" aria-label="Evidence confidence levels">
+            <span class="confidence-badge" data-level="prepared">Prepared</span>
+            <span class="confidence-badge" data-level="transmitted">Transmitted</span>
+            <span class="confidence-badge" data-level="acknowledged">Acknowledged</span>
+            <span class="confidence-badge" data-level="physically_confirmed">Physically confirmed</span>
+          </div>
           <button onclick="generate('{{job.id}}')">Generate continuation from selected y</button>
           <pre id="out-{{job.id}}">No recovery analysis yet.</pre>
           <pre id="timeline-{{job.id}}" hidden>No timeline loaded.</pre>
@@ -146,6 +156,14 @@ async function checkpointMap(id) {
     return `<circle cx="${width / 2}" cy="${y.toFixed(1)}" r="7" fill="${color}" aria-label="${point.y_mm} mm, ${point.confidence}"></circle><text x="${width / 2 + 14}" y="${y.toFixed(1) + 4}" font-size="12">${point.y_mm} mm · ${point.confidence}</text>`;
   }).join('');
   target.innerHTML = `<svg viewBox="0 0 ${width} 180" role="img" aria-label="Checkpoint positions by Y coordinate"><line x1="${width / 2}" y1="${top}" x2="${width / 2}" y2="${bottom}" stroke="#8da0b3" stroke-width="4"></line>${circles}<text x="10" y="${top + 4}" font-size="11">0 mm</text><text x="10" y="${bottom + 4}" font-size="11">${maxY} mm</text></svg>`;
+}
+async function confidenceBadges(id) {
+  const r = await fetch('/api/jobs/'+id);
+  const body = await r.json();
+  const seen = new Set((body.checkpoints || []).map(point => point.confidence));
+  document.querySelectorAll('#confidence-'+id+' [data-level]').forEach(badge => {
+    badge.classList.toggle('seen', seen.has(badge.dataset.level));
+  });
 }
 async function generate(id) {
   const y = document.getElementById('y-'+id).value;
