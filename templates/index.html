@@ -23,6 +23,10 @@
     .confidence-badge { border:1px solid #c9d4df; border-radius:999px; padding:4px 8px; font-size:.78rem; background:#eef2f6; color:#617080; }
     .confidence-badge.seen { background:#dff3e8; border-color:#74b88e; color:#185c36; font-weight:700; }
     .review-panel { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#fffaf0; }
+    .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
+    .action-card { border:2px solid #dce3ea; border-radius:7px; padding:8px; background:#f7fafc; color:#617080; }
+    .action-card.recommended { border-color:#1f7a4d; background:#dff3e8; color:#185c36; font-weight:700; }
+    .action-card small { display:block; font-weight:400; margin-top:4px; }
     pre { white-space: pre-wrap; background:#101820; color:#dce9f3; padding:12px; border-radius:7px; min-height: 80px; }
   </style>
 </head>
@@ -106,6 +110,11 @@
             <span class="confidence-badge" data-level="physically_confirmed">Physically confirmed</span>
           </div>
           <button onclick="generate('{{job.id}}')">Generate continuation from selected y</button>
+          <div id="actions-{{job.id}}" class="action-cards" aria-label="Recovery actions">
+            <div class="action-card" data-action="CONTINUE">Continue<small>Use the proposed continuation after approval.</small></div>
+            <div class="action-card" data-action="TEST_FIRST">Test first<small>Print a registration test before continuation.</small></div>
+            <div class="action-card" data-action="RESTART">Restart<small>Restart the job when recovery evidence is insufficient.</small></div>
+          </div>
           <pre id="out-{{job.id}}">No recovery analysis yet.</pre>
           <pre id="timeline-{{job.id}}" hidden>No timeline loaded.</pre>
           <div id="map-{{job.id}}" class="checkpoint-map" hidden></div>
@@ -137,7 +146,11 @@ async function interrupt(id) {
 }
 async function recommend(id) {
   const r = await fetch('/api/jobs/'+id+'/recommendation');
-  document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
+  const body = await r.json();
+  document.getElementById('out-'+id).textContent = JSON.stringify(body, null, 2);
+  document.querySelectorAll('#actions-'+id+' [data-action]').forEach(card => {
+    card.classList.toggle('recommended', card.dataset.action === body.recommendation);
+  });
 }
 async function timeline(id) {
   const r = await fetch('/api/jobs/'+id+'/timeline?limit=100');
