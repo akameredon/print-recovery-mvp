@@ -68,6 +68,7 @@
         <label>RIP software/version<input name="rip_name" placeholder="Maintop, RasterLink, VersaWorks..."></label>
         <label>Media width (mm)<input name="media_width_mm" type="number" step="0.1" required></label>
         <label>Media length (mm)<input name="media_length_mm" type="number" step="0.1" required></label>
+        <label>Image orientation<select name="orientation"><option value="top-left">Top-left origin</option><option value="top-right">Top-right origin</option><option value="bottom-left">Bottom-left origin</option><option value="bottom-right">Bottom-right origin</option></select></label>
         <label>Resolution<input name="resolution" placeholder="e.g. 720x720"></label>
         <label>Passes<input name="passes" type="number" min="0"></label>
         <label>Colour profile<input name="profile" placeholder="Profile name"></label>
@@ -129,6 +130,7 @@
         </div>
         <div>
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
+          <button class="secondary" onclick="validateOrientation('{{job.id}}')">Validate image orientation and origin</button>
           <button class="secondary" onclick="timeline('{{job.id}}')">Show evidence timeline</button>
           <a href="/api/jobs/{{job.id}}/events/raw" download>Download raw events</a>
           <button class="secondary" onclick="checkpointMap('{{job.id}}')">Show checkpoint map</button>
@@ -164,6 +166,10 @@
     {% endfor %}
   </section>
 <script>
+async function validateOrientation(id) {
+  const r = await fetch('/api/jobs/'+id+'/orientation');
+  document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
+}
 async function checkpoint(id) {
   const y = document.getElementById('y-'+id).value;
   const evidence = document.getElementById('e-'+id).value;

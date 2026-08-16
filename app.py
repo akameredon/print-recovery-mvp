@@ -32,6 +32,7 @@ from coordinate_conversion import media_mm_to_pixel
 from interruption_classification import classify_interruption
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
+from orientation_validation import validate_orientation_origin
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = load_config(ROOT)
@@ -397,8 +398,8 @@ def create_job():
     form = request.form
     conn = db()
     conn.execute(
-        """INSERT INTO jobs(id,file_name,source_path,source_hash,printer_model,rip_name,media_width_mm,media_length_mm,origin_x_mm,origin_y_mm,scale,resolution,passes,profile,overlap_mm,status,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO jobs(id,file_name,source_path,source_hash,printer_model,rip_name,media_width_mm,media_length_mm,origin_x_mm,origin_y_mm,scale,resolution,passes,profile,overlap_mm,orientation,status,created_at,updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             job_id,
             safe_name,
@@ -415,6 +416,7 @@ def create_job():
             int(form.get("passes") or 0),
             form.get("profile", "Not recorded"),
             float(form.get("overlap_mm") or 5.0),
+            form.get("orientation", "top-left").strip().lower(),
             "READY",
             now(),
             now(),
@@ -959,6 +961,34 @@ def recommendation(job_id):
         selected_y_mm=selected,
         overlap_mm=5,
     )
+
+
+@app.get("/api/jobs/<job_id>/orientation")
+def validate_job_orientation(job_id):
+    conn = db()
+    job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    source_path = Path(job["source_path"])
+    try:
+        with Image.open(source_path) as source:
+            result = validate_orientation_origin(
+                image_width_px=source.width,
+                image_height_px=source.height,
+                media_width_mm=float(job["media_width_mm"] or 0),
+                media_length_mm=float(job["media_length_mm"] or 0),
+                origin_x_mm=float(job["origin_x_mm"] or 0),
+                origin_y_mm=float(job["origin_y_mm"] or 0),
+                orientation=job["orientation"],
+            )
+    except (OSError, TypeError, ValueError) as error:
+        conn.close()
+        return error_response(
+            f"Orientation validation failed: {error}", 400, "ORIENTATION_VALIDATION_FAILED"
+        )
+    conn.close()
+    return jsonify(ok=True, job_id=job_id, **result)
 
 
 @app.post("/api/jobs/<job_id>/overlap")
