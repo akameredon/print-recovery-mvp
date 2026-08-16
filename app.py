@@ -5,21 +5,51 @@ import json
 import os
 import sqlite3
 import uuid
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, url_for
 from PIL import Image
+
+from logging_utils import configure_logging, set_correlation_id
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "outputs"
 DB_PATH = DATA_DIR / "print_recovery.sqlite3"
+LOG_PATH = DATA_DIR / "print_recovery.log"
 DATA_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+logger = configure_logging(str(LOG_PATH))
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+
+
+@app.before_request
+def begin_request():
+    g.request_started = time.perf_counter()
+    g.correlation_id = set_correlation_id(request.headers.get("X-Correlation-ID"))
+
+
+@app.after_request
+def finish_request(response):
+    duration_ms = round((time.perf_counter() - g.get("request_started", time.perf_counter())) * 1000, 2)
+    logger.info(
+        "request_completed",
+        extra={"route": request.path, "status_code": response.status_code, "duration_ms": duration_ms},
+    )
+    response.headers["X-Correlation-ID"] = g.get("correlation_id", "-")
+    return response
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    logger.exception("unhandled_exception", extra={"route": request.path, "status_code": 500})
+    if request.path.startswith("/api/"):
+        return jsonify(error="Internal server error", correlation_id=g.get("correlation_id", "-")), 500
+    return "Internal server error", 500
 
 
 def now() -> str:
@@ -102,6 +132,10 @@ def record_event(conn, job_id, event_type, source, payload):
         "INSERT INTO events(job_id,event_type,source,payload,created_at) VALUES(?,?,?,?,?)",
         (job_id, event_type, source, json.dumps(payload), now()),
     )
+    logger.info(
+        "domain_event_recorded",
+        extra={"job_id": job_id, "event_type": event_type},
+    )
 
 
 def latest_checkpoint(conn, job_id):
@@ -120,6 +154,7 @@ def index():
 
 @app.post("/api/jobs")
 def create_job():
+    logger.info("job_creation_started", extra={"route": request.path})
     file = request.files.get("file")
     if not file or not file.filename:
         return jsonify(error="An image or source file is required for this prototype."), 400
@@ -156,11 +191,13 @@ def create_job():
     record_event(conn, job_id, "JOB_CREATED", "operator", {"file_name": safe_name, "source_hash": digest})
     conn.commit()
     conn.close()
+    logger.info("job_created", extra={"job_id": job_id})
     return redirect(url_for("index"))
 
 
 @app.post("/api/jobs/<job_id>/checkpoint")
 def checkpoint(job_id):
+    logger.debug("checkpoint_received", extra={"job_id": job_id})
     payload = request.get_json(silent=True) or request.form
     y_mm = float(payload.get("y_mm", 0))
     band_mm = float(payload.get("band_mm", 1))
@@ -186,6 +223,7 @@ def checkpoint(job_id):
 
 @app.post("/api/jobs/<job_id>/interrupt")
 def interrupt(job_id):
+    logger.warning("interruption_received", extra={"job_id": job_id})
     payload = request.get_json(silent=True) or request.form
     event_type = payload.get("event_type", "UNKNOWN_INTERRUPTION")
     source = payload.get("source", "operator")
@@ -237,6 +275,7 @@ def recommendation(job_id):
 
 @app.post("/api/jobs/<job_id>/continuation")
 def continuation(job_id):
+    logger.info("continuation_generation_started", extra={"job_id": job_id})
     payload = request.get_json(silent=True) or request.form
     y_mm = float(payload.get("y_mm", 0))
     overlap_mm = float(payload.get("overlap_mm", 5))
