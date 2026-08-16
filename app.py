@@ -12,19 +12,21 @@ from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, url_for
 from PIL import Image
 
+from config import load_config, resolve_path
 from logging_utils import configure_logging, set_correlation_id
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-OUTPUT_DIR = ROOT / "outputs"
+CONFIG = load_config(ROOT)
+DATA_DIR = resolve_path(ROOT, CONFIG["data_dir"])
+OUTPUT_DIR = resolve_path(ROOT, CONFIG["output_dir"])
 DB_PATH = DATA_DIR / "print_recovery.sqlite3"
 LOG_PATH = DATA_DIR / "print_recovery.log"
-DATA_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-logger = configure_logging(str(LOG_PATH))
+logger = configure_logging(str(LOG_PATH), CONFIG["log_level"])
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = CONFIG["max_upload_mb"] * 1024 * 1024
 
 
 @app.before_request
@@ -317,4 +319,4 @@ def outputs(name):
 init_db()
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5173, debug=False)
+    app.run(host=CONFIG["host"], port=CONFIG["port"], debug=False)

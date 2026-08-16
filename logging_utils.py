@@ -29,11 +29,11 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
-def configure_logging(log_path: str | None = None) -> logging.Logger:
+def configure_logging(log_path: str | None = None, level: str | None = None) -> logging.Logger:
     logger = logging.getLogger("print_recovery")
     if logger.handlers:
         return logger
-    logger.setLevel(os.getenv("PRINT_RECOVERY_LOG_LEVEL", "INFO").upper())
+    logger.setLevel((level or os.getenv("PRINT_RECOVERY_LOG_LEVEL", "INFO")).upper())
     formatter = JsonFormatter()
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(formatter)

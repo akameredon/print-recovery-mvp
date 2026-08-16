@@ -1,0 +1,8 @@
+{
+  "data_dir": "data",
+  "output_dir": "outputs",
+  "log_level": "INFO",
+  "host": "127.0.0.1",
+  "port": 5173,
+  "max_upload_mb": 100
+}
