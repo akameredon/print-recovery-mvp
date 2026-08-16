@@ -31,6 +31,7 @@ from config import load_config, resolve_path
 from coordinate_conversion import media_mm_to_pixel
 from interruption_classification import classify_interruption
 from job_manifest import build_job_manifest
+from lifecycle_observer import observe_lifecycle
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
@@ -943,6 +944,35 @@ def export_raw_events(job_id):
         mimetype="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/api/jobs/<job_id>/lifecycle/observe")
+def observe_job_lifecycle(job_id):
+    payload = request.get_json(silent=True) or {}
+    events = payload.get("events")
+    source = (
+        str(payload.get("source", "rip_lifecycle_observer")).strip() or "rip_lifecycle_observer"
+    )
+    if not isinstance(events, list) or not events:
+        return error_response("events must be a non-empty list", 400, "INVALID_LIFECYCLE_EVENTS")
+    observation = observe_lifecycle(events)
+    conn = db()
+    if not conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    if observation["status"] == "invalid":
+        conn.close()
+        return jsonify(ok=False, job_id=job_id, source=source, observation=observation), 400
+    record_event(
+        conn,
+        job_id,
+        "RIP_LIFECYCLE_OBSERVED",
+        source,
+        {"source": source, "events": events, "observation": observation},
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, job_id=job_id, source=source, observation=observation)
 
 
 @app.post("/api/jobs/<job_id>/adapter/simulate")
