@@ -126,6 +126,7 @@
         <div>
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
           <button class="secondary" onclick="timeline('{{job.id}}')">Show evidence timeline</button>
+          <a href="/api/jobs/{{job.id}}/events/raw" download>Download raw events</a>
           <button class="secondary" onclick="checkpointMap('{{job.id}}')">Show checkpoint map</button>
           <button class="secondary" onclick="confidenceBadges('{{job.id}}')">Refresh evidence confidence</button>
           <button class="secondary" onclick="openReview('{{job.id}}')">Review recovery decision</button>

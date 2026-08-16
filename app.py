@@ -743,6 +743,44 @@ def recovery_timeline(job_id):
     )
 
 
+@app.get("/api/jobs/<job_id>/events/raw")
+def export_raw_events(job_id):
+    export_format = request.args.get("format", "jsonl").lower()
+    if export_format != "jsonl":
+        return error_response("format must be jsonl", 400, "INVALID_RAW_EVENT_FORMAT")
+    conn = db()
+    job_exists = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job_exists:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    rows = conn.execute(
+        "SELECT id,job_id,event_type,source,payload,created_at FROM events WHERE job_id=? ORDER BY id",
+        (job_id,),
+    ).fetchall()
+    conn.close()
+    lines = []
+    for row in rows:
+        lines.append(
+            json.dumps(
+                {
+                    "id": row["id"],
+                    "job_id": row["job_id"],
+                    "event_type": row["event_type"],
+                    "source": row["source"],
+                    "payload_raw": row["payload"],
+                    "created_at": row["created_at"],
+                },
+                separators=(",", ":"),
+            )
+        )
+    filename = f"{job_id}_raw_events.jsonl"
+    return Response(
+        "\n".join(lines) + ("\n" if lines else ""),
+        mimetype="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/jobs/<job_id>/status-history")
 def status_history(job_id):
     try:
