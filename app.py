@@ -355,6 +355,47 @@ def job_detail(job_id):
     return jsonify(job=job, checkpoints=checkpoints, events=events, status_history=status_history)
 
 
+@app.get("/api/jobs/<job_id>/status-history")
+def status_history(job_id):
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 25))
+    except ValueError:
+        return error_response("page and per_page must be integers", 400, "INVALID_PAGINATION")
+    if page < 1 or per_page < 1 or per_page > 100:
+        return error_response(
+            "page must be at least 1 and per_page must be between 1 and 100",
+            400,
+            "INVALID_PAGINATION",
+        )
+
+    conn = db()
+    job_exists = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job_exists:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    total = conn.execute(
+        "SELECT COUNT(*) FROM job_status_history WHERE job_id=?", (job_id,)
+    ).fetchone()[0]
+    offset = (page - 1) * per_page
+    rows = conn.execute(
+        "SELECT * FROM job_status_history WHERE job_id=? ORDER BY id LIMIT ? OFFSET ?",
+        (job_id, per_page, offset),
+    ).fetchall()
+    conn.close()
+    pages = (total + per_page - 1) // per_page if total else 0
+    return jsonify(
+        job_id=job_id,
+        items=[row_dict(row) for row in rows],
+        page=page,
+        per_page=per_page,
+        total=total,
+        pages=pages,
+        has_next=page < pages,
+        has_previous=page > 1 and pages > 0,
+    )
+
+
 @app.get("/api/jobs/<job_id>/recommendation")
 def recommendation(job_id):
     conn = db()
