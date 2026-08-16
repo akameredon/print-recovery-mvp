@@ -735,6 +735,56 @@ def continuation(job_id):
     )
 
 
+@app.post("/api/jobs/<job_id>/review")
+def review_recovery(job_id):
+    payload = request.get_json(silent=True) or request.form
+    action = str(payload.get("action", "")).strip().lower()
+    note = str(payload.get("note", "")).strip()
+    if action not in {"approved", "rejected"}:
+        return error_response(
+            "action must be either approved or rejected", 400, "INVALID_REVIEW_ACTION"
+        )
+    if len(note) > 1000:
+        return error_response("note must be 1000 characters or fewer", 400, "INVALID_REVIEW_NOTE")
+
+    conn = db()
+    job = conn.execute("SELECT id,status FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    decision = conn.execute(
+        "SELECT * FROM decisions WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,)
+    ).fetchone()
+    if not decision:
+        conn.close()
+        return error_response("No recovery decision exists to review", 409, "NO_DECISION")
+
+    operator_action = f"{action}: {note}" if note else action
+    conn.execute(
+        "UPDATE decisions SET operator_action=? WHERE id=?", (operator_action, decision["id"])
+    )
+    record_event(
+        conn,
+        job_id,
+        "RECOVERY_REVIEWED",
+        "operator",
+        {"action": action, "note": note, "decision_id": decision["id"]},
+    )
+    conn.commit()
+    conn.close()
+    logger.info("recovery_review_recorded", extra={"job_id": job_id, "event_type": action})
+    return jsonify(
+        ok=True,
+        job_id=job_id,
+        decision_id=decision["id"],
+        action=action,
+        note=note,
+        job_status=job["status"],
+        operator_confirmation_required=True,
+        request_correlation_id=g.get("correlation_id", "-"),
+    )
+
+
 @app.get("/outputs/<path:name>")
 def outputs(name):
     return send_from_directory(OUTPUT_DIR, name, as_attachment=True)
