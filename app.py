@@ -28,6 +28,7 @@ from werkzeug.exceptions import HTTPException
 from adapters import SimulatedAdapter
 from checkpoint_confidence import calculate_checkpoint_confidence
 from config import load_config, resolve_path
+from coordinate_conversion import media_mm_to_pixel
 from interruption_classification import classify_interruption
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
@@ -1005,8 +1006,8 @@ def continuation_preview(job_id):
             selected_y_mm = min(selected_y_mm, media_length_mm)
             uncertain_start_mm = max(0.0, selected_y_mm - overlap_mm)
             uncertain_end_mm = min(media_length_mm, selected_y_mm + overlap_mm)
-            selected_px = int(selected_y_mm / media_length_mm * source.height)
-            overlap_px = int(overlap_mm / media_length_mm * source.height)
+            selected_px = media_mm_to_pixel(selected_y_mm, media_length_mm, source.height)
+            overlap_px = media_mm_to_pixel(overlap_mm, media_length_mm, source.height, clamp=False)
             uncertain_start_px = max(0, selected_px - overlap_px)
             uncertain_end_px = min(source.height, selected_px + overlap_px)
             preview_width = min(720, source.width)
@@ -1092,12 +1093,12 @@ def continuation(job_id):
         with Image.open(source_path) as im:
             if im.height <= 0:
                 raise ValueError("Image has no height")
-            ratio = y_mm / max(float(job["media_length_mm"] or im.height), 1.0)
-            start_px = int(max(0, min(im.height - 1, ratio * im.height)))
-            overlap_px = max(
-                0,
-                int(overlap_mm / max(float(job["media_length_mm"] or im.height), 1.0) * im.height),
+            media_length_mm = max(float(job["media_length_mm"] or im.height), 1.0)
+            start_px = min(
+                im.height - 1,
+                media_mm_to_pixel(y_mm, media_length_mm, im.height),
             )
+            overlap_px = media_mm_to_pixel(overlap_mm, media_length_mm, im.height, clamp=False)
             crop_start = max(0, start_px - overlap_px)
             im.crop((0, crop_start, im.width, im.height)).save(output_path)
     except Exception as exc:
