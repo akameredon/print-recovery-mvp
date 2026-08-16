@@ -326,7 +326,12 @@ def index():
         conn.close()
     except ValueError as error:
         return error_response(str(error), 400, "INVALID_JOB_QUERY")
-    return render_template("index.html", jobs=jobs, **values)
+    return render_template(
+        "index.html",
+        jobs=jobs,
+        checkpoint_interval_mm=CONFIG["checkpoint_interval_mm"],
+        **values,
+    )
 
 
 @app.post("/api/jobs")
@@ -386,6 +391,7 @@ def checkpoint(job_id):
     band_mm = float(payload.get("band_mm", 1))
     state = payload.get("state", "PRINTING")
     evidence = payload.get("evidence", "transmitted")
+    interval_mm = CONFIG["checkpoint_interval_mm"]
     confidence = {
         "prepared": "prepared",
         "transmitted": "transmitted",
@@ -399,11 +405,21 @@ def checkpoint(job_id):
     )
     record_status_transition(conn, job_id, "PRINTING", "checkpoint_recorded", "operator_or_adapter")
     record_event(
-        conn, job_id, "CHECKPOINT", "operator_or_adapter", {"y_mm": y_mm, "evidence": evidence}
+        conn,
+        job_id,
+        "CHECKPOINT",
+        "operator_or_adapter",
+        {"y_mm": y_mm, "evidence": evidence, "interval_mm": interval_mm},
     )
     conn.commit()
     conn.close()
-    return jsonify(ok=True, job_id=job_id, y_mm=y_mm, confidence=confidence)
+    return jsonify(
+        ok=True,
+        job_id=job_id,
+        y_mm=y_mm,
+        confidence=confidence,
+        checkpoint_interval_mm=interval_mm,
+    )
 
 
 @app.post("/api/jobs/<job_id>/interrupt")

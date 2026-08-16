@@ -12,6 +12,7 @@ DEFAULTS: dict[str, Any] = {
     "host": "127.0.0.1",
     "port": 5173,
     "max_upload_mb": 100,
+    "checkpoint_interval_mm": 100.0,
 }
 
 
@@ -33,6 +34,7 @@ def load_config(root: Path) -> dict[str, Any]:
         "PRINT_RECOVERY_HOST": "host",
         "PRINT_RECOVERY_PORT": "port",
         "PRINT_RECOVERY_MAX_UPLOAD_MB": "max_upload_mb",
+        "PRINT_RECOVERY_CHECKPOINT_INTERVAL_MM": "checkpoint_interval_mm",
     }
     for env_name, key in env_map.items():
         if env_name in os.environ:
@@ -40,11 +42,14 @@ def load_config(root: Path) -> dict[str, Any]:
 
     config["port"] = int(config["port"])
     config["max_upload_mb"] = int(config["max_upload_mb"])
+    config["checkpoint_interval_mm"] = float(config["checkpoint_interval_mm"])
     config["log_level"] = str(config["log_level"]).upper()
     if config["port"] < 1 or config["port"] > 65535:
         raise ValueError("port must be between 1 and 65535")
     if config["max_upload_mb"] < 1:
         raise ValueError("max_upload_mb must be positive")
+    if config["checkpoint_interval_mm"] <= 0:
+        raise ValueError("checkpoint_interval_mm must be positive")
     return config
 
 
