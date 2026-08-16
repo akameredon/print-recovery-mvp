@@ -7,6 +7,9 @@
   <style>
     :root { font-family: Inter, system-ui, sans-serif; color: #18212b; background: #f4f7fa; }
     body { max-width: 1120px; margin: 0 auto; padding: 28px; }
+    .skip-link { position:absolute; left:-9999px; top:8px; background:#18212b; color:white; padding:10px; z-index:10; }
+    .skip-link:focus { left:8px; }
+    :focus-visible { outline:3px solid #f2a900; outline-offset:2px; }
     h1 { margin-bottom: 6px; } .muted { color: #617080; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(310px,1fr)); gap: 18px; }
     .card { background: white; border: 1px solid #dce3ea; border-radius: 12px; padding: 18px; box-shadow: 0 2px 8px #1322380d; }
@@ -31,6 +34,8 @@
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <main id="main-content" tabindex="-1">
   <h1>Print Recovery State Capture — MVP</h1>
   <p class="muted">Local prototype: preserve a job, record checkpoints, classify interruption and generate an assisted continuation image. It does not control printer hardware.</p>
 
@@ -115,8 +120,8 @@
             <div class="action-card" data-action="TEST_FIRST">Test first<small>Print a registration test before continuation.</small></div>
             <div class="action-card" data-action="RESTART">Restart<small>Restart the job when recovery evidence is insufficient.</small></div>
           </div>
-          <pre id="out-{{job.id}}">No recovery analysis yet.</pre>
-          <pre id="timeline-{{job.id}}" hidden>No timeline loaded.</pre>
+          <pre id="out-{{job.id}}" aria-live="polite">No recovery analysis yet.</pre>
+          <pre id="timeline-{{job.id}}" aria-live="polite" hidden>No timeline loaded.</pre>
           <div id="map-{{job.id}}" class="checkpoint-map" hidden></div>
           <div id="review-{{job.id}}" class="review-panel" hidden>
             <strong>Operator approval required</strong>
@@ -210,5 +215,6 @@ async function generate(id) {
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
 }
 </script>
+  </main>
 </body>
 </html>
