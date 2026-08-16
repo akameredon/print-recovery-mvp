@@ -389,6 +389,17 @@ def checkpoint(job_id):
     payload = request.get_json(silent=True) or request.form
     y_mm = float(payload.get("y_mm", 0))
     band_mm = float(payload.get("band_mm", 1))
+    logical_band = payload.get("logical_band")
+    pass_number = payload.get("pass_number")
+    try:
+        logical_band = int(logical_band) if logical_band not in (None, "") else None
+        pass_number = int(pass_number) if pass_number not in (None, "") else None
+    except (TypeError, ValueError) as error:
+        raise ValueError("logical_band and pass_number must be integers") from error
+    if logical_band is not None and logical_band < 0:
+        raise ValueError("logical_band must be non-negative")
+    if pass_number is not None and pass_number < 0:
+        raise ValueError("pass_number must be non-negative")
     state = payload.get("state", "PRINTING")
     evidence = payload.get("evidence", "transmitted")
     interval_mm = CONFIG["checkpoint_interval_mm"]
@@ -400,8 +411,8 @@ def checkpoint(job_id):
     }.get(evidence, "transmitted")
     conn = db()
     conn.execute(
-        "INSERT INTO checkpoints(job_id,y_mm,band_mm,state,evidence,confidence,created_at) VALUES(?,?,?,?,?,?,?)",
-        (job_id, y_mm, band_mm, state, evidence, confidence, now()),
+        "INSERT INTO checkpoints(job_id,y_mm,band_mm,logical_band,pass_number,state,evidence,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (job_id, y_mm, band_mm, logical_band, pass_number, state, evidence, confidence, now()),
     )
     record_status_transition(conn, job_id, "PRINTING", "checkpoint_recorded", "operator_or_adapter")
     record_event(
@@ -409,7 +420,13 @@ def checkpoint(job_id):
         job_id,
         "CHECKPOINT",
         "operator_or_adapter",
-        {"y_mm": y_mm, "evidence": evidence, "interval_mm": interval_mm},
+        {
+            "y_mm": y_mm,
+            "evidence": evidence,
+            "interval_mm": interval_mm,
+            "logical_band": logical_band,
+            "pass_number": pass_number,
+        },
     )
     conn.commit()
     conn.close()
@@ -419,6 +436,8 @@ def checkpoint(job_id):
         y_mm=y_mm,
         confidence=confidence,
         checkpoint_interval_mm=interval_mm,
+        logical_band=logical_band,
+        pass_number=pass_number,
     )
 
 

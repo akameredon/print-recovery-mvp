@@ -115,6 +115,8 @@
         <div>
           <label>Checkpoint y-coordinate (mm)<input id="y-{{job.id}}" type="number" step="{{ checkpoint_interval_mm }}" value="100" aria-describedby="interval-help-{{job.id}}"></label>
           <small id="interval-help-{{job.id}}">Configured checkpoint interval: {{ checkpoint_interval_mm }} mm</small>
+          <label>Logical band<input id="band-{{job.id}}" type="number" min="0" step="1" placeholder="Optional band number"></label>
+          <label>Pass number<input id="pass-{{job.id}}" type="number" min="0" step="1" placeholder="Optional pass number"></label>
           <label>Evidence<select id="e-{{job.id}}"><option value="prepared">Prepared</option><option value="transmitted" selected>Transmitted</option><option value="acknowledged">Acknowledged</option><option value="physical">Physically confirmed</option></select></label>
           <button onclick="checkpoint('{{job.id}}')">Record checkpoint</button>
           <label>Interruption reason<select id="reason-{{job.id}}"><option value="POWER_LOSS">Power loss</option><option value="PROTECTION_TRIP">Lightning/protection trip</option><option value="COMMUNICATION_LOSS">Communication loss</option><option value="PRINTER_ERROR">Printer error</option><option value="MATERIAL_ISSUE">Material issue</option><option value="OPERATOR_ABORT">Operator abort</option><option value="UNKNOWN">Unknown</option></select></label>
@@ -158,7 +160,9 @@
 async function checkpoint(id) {
   const y = document.getElementById('y-'+id).value;
   const evidence = document.getElementById('e-'+id).value;
-  const r = await fetch('/api/jobs/'+id+'/checkpoint', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({y_mm:y,evidence})});
+  const logical_band = document.getElementById('band-'+id).value;
+  const pass_number = document.getElementById('pass-'+id).value;
+  const r = await fetch('/api/jobs/'+id+'/checkpoint', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({y_mm:y,evidence,logical_band,pass_number})});
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
 }
 async function interrupt(id) {
