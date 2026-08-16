@@ -12,6 +12,10 @@ python3 app.py
 
 Open `http://127.0.0.1:5173` in a browser. Create a test job with an image and media dimensions, record one or more checkpoints, mark an interruption, review the recommendation and generate a continuation image.
 
+## Installation
+
+See [docs/installation.md](docs/installation.md) for prerequisites, setup, configuration, testing, startup and troubleshooting.
+
 ## Roadmap
 
 See [docs/100-day-roadmap.md](docs/100-day-roadmap.md) for the one-improvement-per-day plan from MVP toward a multi-user beta.
