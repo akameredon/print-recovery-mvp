@@ -30,6 +30,10 @@
     .action-card { border:2px solid #dce3ea; border-radius:7px; padding:8px; background:#f7fafc; color:#617080; }
     .action-card.recommended { border-color:#1f7a4d; background:#dff3e8; color:#185c36; font-weight:700; }
     .action-card small { display:block; font-weight:400; margin-top:4px; }
+    .workflow-list { padding-left: 24px; } .workflow-list li { margin: 8px 0; }
+    .workflow-list strong { color:#145da0; }
+    .print-button { width:auto; padding:8px 14px; }
+    @media print { body { max-width:none; background:white; color:black; } .skip-link, button, form, .job > .grid, .muted { display:none !important; } .card { box-shadow:none; border:1px solid #777; } #workflow-guide { display:block !important; } }
     pre { white-space: pre-wrap; background:#101820; color:#dce9f3; padding:12px; border-radius:7px; min-height: 80px; }
   </style>
 </head>
@@ -38,6 +42,20 @@
   <main id="main-content" tabindex="-1">
   <h1>Print Recovery State Capture — MVP</h1>
   <p class="muted">Local prototype: preserve a job, record checkpoints, classify interruption and generate an assisted continuation image. It does not control printer hardware.</p>
+
+  <section id="workflow-guide" class="card" aria-labelledby="workflow-title">
+    <h2 id="workflow-title">Operator paper workflow</h2>
+    <p>Use this checklist after a trip. Tick each step on paper before proceeding.</p>
+    <ol class="workflow-list">
+      <li><strong>Stabilize:</strong> restore safe power and confirm the printer/RIP is ready.</li>
+      <li><strong>Identify:</strong> locate the exact job and confirm the source file and printer/RIP metadata.</li>
+      <li><strong>Verify:</strong> review source integrity, latest checkpoint, interruption reason and evidence confidence.</li>
+      <li><strong>Choose:</strong> follow the highlighted Continue, Test first or Restart recommendation.</li>
+      <li><strong>Approve:</strong> record an explicit operator approval or rejection with a note.</li>
+      <li><strong>Validate:</strong> use a registration test when evidence is not physically confirmed.</li>
+    </ol>
+    <button type="button" class="secondary print-button" onclick="window.print()">Print checklist</button>
+  </section>
 
   <div class="grid">
     <section class="card">
