@@ -33,6 +33,7 @@ from interruption_classification import classify_interruption
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
+from output_naming import continuation_output_name
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = load_config(ROOT)
@@ -1117,8 +1118,19 @@ def continuation(job_id):
         conn.close()
         return error_response("overlap_mm must be non-negative", 400, "INVALID_OVERLAP")
     source_path = Path(job["source_path"])
-    output_name = f"{job_id}_continuation_from_{y_mm:.1f}mm.png"
+    generated_count = conn.execute(
+        "SELECT COUNT(*) FROM decisions WHERE job_id=? AND operator_action='generated_continuation'",
+        (job_id,),
+    ).fetchone()[0]
+    version = int(generated_count) + 1
+    output_name = continuation_output_name(job_id, job["source_hash"], version, y_mm, overlap_mm)
     output_path = OUTPUT_DIR / output_name
+    while output_path.exists():
+        version += 1
+        output_name = continuation_output_name(
+            job_id, job["source_hash"], version, y_mm, overlap_mm
+        )
+        output_path = OUTPUT_DIR / output_name
     try:
         with Image.open(source_path) as im:
             if im.height <= 0:
@@ -1155,7 +1167,13 @@ def continuation(job_id):
         job_id,
         "CONTINUATION_GENERATED",
         "recovery_engine",
-        {"file": output_name, "y_mm": y_mm, "overlap_mm": overlap_mm},
+        {
+            "file": output_name,
+            "version": version,
+            "source_hash": job["source_hash"],
+            "y_mm": y_mm,
+            "overlap_mm": overlap_mm,
+        },
     )
     conn.commit()
     conn.close()
@@ -1165,6 +1183,8 @@ def continuation(job_id):
         url=f"/outputs/{output_name}",
         selected_y_mm=y_mm,
         overlap_mm=overlap_mm,
+        version=version,
+        source_hash=job["source_hash"],
     )
 
 
