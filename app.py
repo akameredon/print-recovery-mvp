@@ -735,6 +735,55 @@ def continuation(job_id):
     )
 
 
+@app.get("/api/jobs/<job_id>/review")
+def review_summary(job_id):
+    conn = db()
+    job = conn.execute("SELECT id,status FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    decision = conn.execute(
+        "SELECT * FROM decisions WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,)
+    ).fetchone()
+    if not decision:
+        conn.close()
+        return error_response("No recovery decision exists to review", 409, "NO_DECISION")
+    review_events = []
+    for row in conn.execute(
+        "SELECT * FROM events WHERE job_id=? AND event_type='RECOVERY_REVIEWED' ORDER BY id",
+        (job_id,),
+    ).fetchall():
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            payload = {"raw": row["payload"]}
+        review_events.append(
+            {
+                "id": row["id"],
+                "timestamp": row["created_at"],
+                "source": row["source"],
+                "details": payload,
+            }
+        )
+    operator_action = decision["operator_action"] or ""
+    review_state = (
+        "approved"
+        if operator_action.startswith("approved")
+        else "rejected" if operator_action.startswith("rejected") else "pending"
+    )
+    response = {
+        "job_id": job_id,
+        "job_status": job["status"],
+        "review_state": review_state,
+        "decision": row_dict(decision),
+        "review_events": review_events,
+        "operator_confirmation_required": review_state == "pending",
+        "request_correlation_id": g.get("correlation_id", "-"),
+    }
+    conn.close()
+    return jsonify(response)
+
+
 @app.post("/api/jobs/<job_id>/review")
 def review_recovery(job_id):
     payload = request.get_json(silent=True) or request.form
