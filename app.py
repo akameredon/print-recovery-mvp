@@ -227,14 +227,49 @@ def diagnostics():
     return jsonify(snapshot)
 
 
+JOB_FILTERS = {
+    "all": None,
+    "active": ("READY", "PRINTING", "RECOVERY_READY", "RECOVERING"),
+    "interrupted": ("INTERRUPTED",),
+    "completed": ("COMPLETED",),
+}
+
+
+def filtered_jobs(conn, filter_name):
+    if filter_name not in JOB_FILTERS:
+        raise ValueError("filter must be one of: all, active, interrupted, completed")
+    statuses = JOB_FILTERS[filter_name]
+    if statuses is None:
+        return conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
+    placeholders = ",".join("?" for _ in statuses)
+    return conn.execute(
+        f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY updated_at DESC",
+        statuses,
+    ).fetchall()
+
+
+@app.get("/api/jobs")
+def jobs_list():
+    filter_name = request.args.get("filter", "all").strip().lower()
+    try:
+        conn = db()
+        jobs = [row_dict(row) for row in filtered_jobs(conn, filter_name)]
+        conn.close()
+    except ValueError as error:
+        return error_response(str(error), 400, "INVALID_JOB_FILTER")
+    return jsonify(filter=filter_name, count=len(jobs), jobs=jobs)
+
+
 @app.route("/")
 def index():
-    conn = db()
-    jobs = [
-        row_dict(r) for r in conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
-    ]
-    conn.close()
-    return render_template("index.html", jobs=jobs)
+    filter_name = request.args.get("filter", "all").strip().lower()
+    try:
+        conn = db()
+        jobs = [row_dict(row) for row in filtered_jobs(conn, filter_name)]
+        conn.close()
+    except ValueError as error:
+        return error_response(str(error), 400, "INVALID_JOB_FILTER")
+    return render_template("index.html", jobs=jobs, selected_filter=filter_name)
 
 
 @app.post("/api/jobs")

@@ -9,7 +9,10 @@ assert missing_body["error"] == "NOT_FOUND"
 assert missing_body["status"] == 404
 assert missing_body["correlation_id"] == "day6-404"
 
-wrong_method = requests.get(BASE + "/api/jobs", headers={"X-Correlation-ID": "day6-405"})
+wrong_method = requests.get(
+    BASE + "/api/jobs/not-a-real-job/checkpoint",
+    headers={"X-Correlation-ID": "day6-405"},
+)
 assert wrong_method.status_code == 405
 wrong_body = wrong_method.json()
 assert wrong_body["error"] == "METHOD_NOT_ALLOWED"

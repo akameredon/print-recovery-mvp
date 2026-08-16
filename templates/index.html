@@ -48,8 +48,22 @@
   </div>
 
   <section class="card" style="margin-top:18px">
-    <h2>Jobs</h2>
-    {% if not jobs %}<p class="muted">No jobs yet. Create a test job above.</p>{% endif %}
+    <div style="display:flex; align-items:end; justify-content:space-between; gap:18px; flex-wrap:wrap">
+      <div>
+        <h2>Jobs</h2>
+        <p class="muted">Showing {{ jobs|length }} job{{ '' if jobs|length == 1 else 's' }} in the <strong>{{ selected_filter }}</strong> view.</p>
+      </div>
+      <form action="/" method="get" style="min-width:220px">
+        <label for="job-filter">Filter jobs</label>
+        <select id="job-filter" name="filter" onchange="this.form.submit()">
+          <option value="all" {% if selected_filter == 'all' %}selected{% endif %}>All jobs</option>
+          <option value="active" {% if selected_filter == 'active' %}selected{% endif %}>Active</option>
+          <option value="interrupted" {% if selected_filter == 'interrupted' %}selected{% endif %}>Interrupted</option>
+          <option value="completed" {% if selected_filter == 'completed' %}selected{% endif %}>Completed</option>
+        </select>
+      </form>
+    </div>
+    {% if not jobs %}<p class="muted">No jobs match this filter.</p>{% endif %}
     {% for job in jobs %}
     <div class="job" data-job="{{ job.id }}">
       <table>
