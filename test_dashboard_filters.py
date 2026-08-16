@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -6,6 +7,7 @@ import requests
 from PIL import Image
 
 BASE = "http://127.0.0.1:5173"
+TOKEN = f"day21-{os.getpid()}"
 
 
 def create_job(name):
@@ -21,13 +23,18 @@ def create_job(name):
         )
     assert response.status_code == 302, response.text
     conn = sqlite3.connect("data/print_recovery.sqlite3")
-    job_id = conn.execute("SELECT id FROM jobs ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+    job_id = conn.execute(
+        "SELECT id FROM jobs WHERE file_name=? ORDER BY id DESC LIMIT 1", (name,)
+    ).fetchone()[0]
     conn.close()
     return job_id
 
 
-active_id = create_job("active-filter.png")
-interrupted_id = create_job("interrupted-filter.png")
+active_name = f"{TOKEN}-active-filter.png"
+interrupted_name = f"{TOKEN}-interrupted-filter.png"
+completed_name = f"{TOKEN}-completed-filter.png"
+active_id = create_job(active_name)
+interrupted_id = create_job(interrupted_name)
 assert (
     requests.post(
         BASE + f"/api/jobs/{interrupted_id}/interrupt",
@@ -35,7 +42,7 @@ assert (
     ).status_code
     == 200
 )
-completed_id = create_job("completed-filter.png")
+completed_id = create_job(completed_name)
 conn = sqlite3.connect("data/print_recovery.sqlite3")
 conn.execute("UPDATE jobs SET status='COMPLETED' WHERE id=?", (completed_id,))
 conn.commit()
@@ -65,5 +72,5 @@ assert 'value="interrupted" selected' in html.text
 
 invalid = requests.get(BASE + "/api/jobs?filter=unknown")
 assert invalid.status_code == 400
-assert invalid.json()["error"] == "INVALID_JOB_FILTER"
+assert invalid.json()["error"] == "INVALID_JOB_QUERY"
 print({"status": "passed", "filters": ["all", "active", "interrupted", "completed"]})

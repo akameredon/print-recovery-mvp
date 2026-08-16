@@ -22,7 +22,8 @@ def create_job(name):
     assert response.status_code == 302, response.text
     conn = sqlite3.connect("data/print_recovery.sqlite3")
     job_id, stored_path = conn.execute(
-        "SELECT id,source_path FROM jobs ORDER BY created_at DESC LIMIT 1"
+        "SELECT id,source_path FROM jobs WHERE file_name=? ORDER BY created_at DESC LIMIT 1",
+        (name,),
     ).fetchone()
     conn.close()
     return job_id, Path(stored_path)

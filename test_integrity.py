@@ -20,7 +20,8 @@ with sample_path.open("rb") as image_file:
 assert response.status_code == 302, response.text
 conn = sqlite3.connect("data/print_recovery.sqlite3")
 job_id, source_path = conn.execute(
-    "SELECT id,source_path FROM jobs ORDER BY created_at DESC LIMIT 1"
+    "SELECT id,source_path FROM jobs WHERE file_name=? ORDER BY created_at DESC LIMIT 1",
+    ("integrity.png",),
 ).fetchone()
 conn.close()
 

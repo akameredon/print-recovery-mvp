@@ -235,41 +235,87 @@ JOB_FILTERS = {
 }
 
 
-def filtered_jobs(conn, filter_name):
+def filtered_jobs(conn, filter_name, search="", date_from="", date_to=""):
     if filter_name not in JOB_FILTERS:
         raise ValueError("filter must be one of: all, active, interrupted, completed")
+    where = []
+    params = []
     statuses = JOB_FILTERS[filter_name]
-    if statuses is None:
-        return conn.execute("SELECT * FROM jobs ORDER BY updated_at DESC").fetchall()
-    placeholders = ",".join("?" for _ in statuses)
-    return conn.execute(
-        f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY updated_at DESC",
-        statuses,
-    ).fetchall()
+    if statuses is not None:
+        placeholders = ",".join("?" for _ in statuses)
+        where.append(f"status IN ({placeholders})")
+        params.extend(statuses)
+    if search:
+        where.append("(id LIKE ? OR file_name LIKE ? OR printer_model LIKE ? OR rip_name LIKE ?)")
+        search_value = f"%{search}%"
+        params.extend([search_value] * 4)
+    for value, operator, error_message in (
+        (date_from, ">=", "date_from must use YYYY-MM-DD"),
+        (date_to, "<=", "date_to must use YYYY-MM-DD"),
+    ):
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as error:
+                raise ValueError(error_message) from error
+            where.append(f"date(created_at) {operator} date(?)")
+            params.append(value)
+    query = "SELECT * FROM jobs"
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY updated_at DESC"
+    return conn.execute(query, params).fetchall()
+
+
+def job_query_values():
+    return {
+        "filter": request.args.get("filter", "all").strip().lower(),
+        "search": request.args.get("q", "").strip(),
+        "date_from": request.args.get("date_from", "").strip(),
+        "date_to": request.args.get("date_to", "").strip(),
+    }
 
 
 @app.get("/api/jobs")
 def jobs_list():
-    filter_name = request.args.get("filter", "all").strip().lower()
+    values = job_query_values()
     try:
         conn = db()
-        jobs = [row_dict(row) for row in filtered_jobs(conn, filter_name)]
+        jobs = [
+            row_dict(row)
+            for row in filtered_jobs(
+                conn,
+                values["filter"],
+                values["search"],
+                values["date_from"],
+                values["date_to"],
+            )
+        ]
         conn.close()
     except ValueError as error:
-        return error_response(str(error), 400, "INVALID_JOB_FILTER")
-    return jsonify(filter=filter_name, count=len(jobs), jobs=jobs)
+        return error_response(str(error), 400, "INVALID_JOB_QUERY")
+    return jsonify(**values, count=len(jobs), jobs=jobs)
 
 
 @app.route("/")
 def index():
-    filter_name = request.args.get("filter", "all").strip().lower()
+    values = job_query_values()
     try:
         conn = db()
-        jobs = [row_dict(row) for row in filtered_jobs(conn, filter_name)]
+        jobs = [
+            row_dict(row)
+            for row in filtered_jobs(
+                conn,
+                values["filter"],
+                values["search"],
+                values["date_from"],
+                values["date_to"],
+            )
+        ]
         conn.close()
     except ValueError as error:
-        return error_response(str(error), 400, "INVALID_JOB_FILTER")
-    return render_template("index.html", jobs=jobs, selected_filter=filter_name)
+        return error_response(str(error), 400, "INVALID_JOB_QUERY")
+    return render_template("index.html", jobs=jobs, **values)
 
 
 @app.post("/api/jobs")

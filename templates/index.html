@@ -51,19 +51,26 @@
     <div style="display:flex; align-items:end; justify-content:space-between; gap:18px; flex-wrap:wrap">
       <div>
         <h2>Jobs</h2>
-        <p class="muted">Showing {{ jobs|length }} job{{ '' if jobs|length == 1 else 's' }} in the <strong>{{ selected_filter }}</strong> view.</p>
+        <p class="muted">Showing {{ jobs|length }} job{{ '' if jobs|length == 1 else 's' }} in the <strong>{{ filter }}</strong> view.</p>
       </div>
       <form action="/" method="get" style="min-width:220px">
         <label for="job-filter">Filter jobs</label>
         <select id="job-filter" name="filter" onchange="this.form.submit()">
-          <option value="all" {% if selected_filter == 'all' %}selected{% endif %}>All jobs</option>
-          <option value="active" {% if selected_filter == 'active' %}selected{% endif %}>Active</option>
-          <option value="interrupted" {% if selected_filter == 'interrupted' %}selected{% endif %}>Interrupted</option>
-          <option value="completed" {% if selected_filter == 'completed' %}selected{% endif %}>Completed</option>
+          <option value="all" {% if filter == 'all' %}selected{% endif %}>All jobs</option>
+          <option value="active" {% if filter == 'active' %}selected{% endif %}>Active</option>
+          <option value="interrupted" {% if filter == 'interrupted' %}selected{% endif %}>Interrupted</option>
+          <option value="completed" {% if filter == 'completed' %}selected{% endif %}>Completed</option>
         </select>
       </form>
     </div>
-    {% if not jobs %}<p class="muted">No jobs match this filter.</p>{% endif %}
+    <form action="/" method="get" class="grid" style="margin-top:8px">
+      <input type="hidden" name="filter" value="{{ filter }}">
+      <label>Search file, job ID, printer or RIP<input name="q" value="{{ search }}" placeholder="e.g. Mimaki, banner.png, job ID"></label>
+      <label>Created from<input name="date_from" type="date" value="{{ date_from }}"></label>
+      <label>Created to<input name="date_to" type="date" value="{{ date_to }}"></label>
+      <div><button type="submit">Apply search</button><a href="/?filter={{ filter }}" style="display:block; margin-top:10px">Clear search</a></div>
+    </form>
+    {% if not jobs %}<p class="muted">No jobs match this filter or search.</p>{% endif %}
     {% for job in jobs %}
     <div class="job" data-job="{{ job.id }}">
       <table>

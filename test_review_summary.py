@@ -19,7 +19,10 @@ with source.open("rb") as image_file:
 assert created.status_code == 302, created.text
 
 conn = sqlite3.connect("data/print_recovery.sqlite3")
-job_id = conn.execute("SELECT id FROM jobs ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+job_id = conn.execute(
+    "SELECT id FROM jobs WHERE file_name=? ORDER BY created_at DESC LIMIT 1",
+    ("review-summary.png",),
+).fetchone()[0]
 conn.close()
 assert (
     requests.post(
