@@ -456,6 +456,100 @@ def recovery_readiness(job_id):
     return jsonify(response)
 
 
+@app.get("/api/jobs/<job_id>/timeline")
+def recovery_timeline(job_id):
+    try:
+        limit = int(request.args.get("limit", 100))
+    except ValueError:
+        return error_response("limit must be an integer", 400, "INVALID_LIMIT")
+    if limit < 1 or limit > 500:
+        return error_response("limit must be between 1 and 500", 400, "INVALID_LIMIT")
+
+    conn = db()
+    if not conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+
+    timeline = []
+    for row in conn.execute(
+        "SELECT * FROM job_status_history WHERE job_id=?", (job_id,)
+    ).fetchall():
+        timeline.append(
+            {
+                "id": row["id"],
+                "kind": "status_transition",
+                "timestamp": row["created_at"],
+                "source": row["source"],
+                "event": row["to_status"],
+                "details": {
+                    "from_status": row["from_status"],
+                    "to_status": row["to_status"],
+                    "reason": row["reason"],
+                },
+            }
+        )
+    for row in conn.execute("SELECT * FROM checkpoints WHERE job_id=?", (job_id,)).fetchall():
+        timeline.append(
+            {
+                "id": row["id"],
+                "kind": "checkpoint",
+                "timestamp": row["created_at"],
+                "source": "checkpoint_recorder",
+                "event": "CHECKPOINT",
+                "details": {
+                    "y_mm": row["y_mm"],
+                    "band_mm": row["band_mm"],
+                    "state": row["state"],
+                    "evidence": row["evidence"],
+                    "confidence": row["confidence"],
+                },
+            }
+        )
+    for row in conn.execute("SELECT * FROM events WHERE job_id=?", (job_id,)).fetchall():
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            payload = {"raw": row["payload"]}
+        timeline.append(
+            {
+                "id": row["id"],
+                "kind": "event",
+                "timestamp": row["created_at"],
+                "source": row["source"],
+                "event": row["event_type"],
+                "details": payload,
+            }
+        )
+    for row in conn.execute("SELECT * FROM decisions WHERE job_id=?", (job_id,)).fetchall():
+        timeline.append(
+            {
+                "id": row["id"],
+                "kind": "decision",
+                "timestamp": row["created_at"],
+                "source": "recovery_assistant",
+                "event": row["recommendation"],
+                "details": {
+                    "selected_y_mm": row["selected_y_mm"],
+                    "overlap_mm": row["overlap_mm"],
+                    "mode": row["mode"],
+                    "confidence": row["confidence"],
+                    "operator_action": row["operator_action"],
+                },
+            }
+        )
+    conn.close()
+    timeline.sort(key=lambda item: (item["timestamp"], item["kind"], item["id"]))
+    total = len(timeline)
+    return jsonify(
+        job_id=job_id,
+        total=total,
+        limit=limit,
+        truncated=total > limit,
+        items=timeline[-limit:],
+        request_correlation_id=g.get("correlation_id", "-"),
+    )
+
+
 @app.get("/api/jobs/<job_id>/status-history")
 def status_history(job_id):
     try:
