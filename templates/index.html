@@ -116,6 +116,8 @@
       <div class="grid">
         <div>
           <label>Checkpoint y-coordinate (mm)<input id="y-{{job.id}}" type="number" step="{{ checkpoint_interval_mm }}" value="100" aria-describedby="interval-help-{{job.id}}"></label>
+          <label>Recovery overlap (mm)<input id="overlap-{{job.id}}" type="number" min="0" step="0.1" value="{{ job.overlap_mm or 5 }}" aria-describedby="overlap-help-{{job.id}}"></label>
+          <small id="overlap-help-{{job.id}}">Per-job overlap used for preview and continuation generation.</small>
           <small id="interval-help-{{job.id}}">Configured checkpoint interval: {{ checkpoint_interval_mm }} mm</small>
           <label>Logical band<input id="band-{{job.id}}" type="number" min="0" step="1" placeholder="Optional band number"></label>
           <label>Pass number<input id="pass-{{job.id}}" type="number" min="0" step="1" placeholder="Optional pass number"></label>
@@ -239,7 +241,8 @@ async function submitReview(id, action) {
 }
 async function preview(id) {
   const y = document.getElementById('y-'+id).value;
-  const r = await fetch('/api/jobs/'+id+'/continuation-preview?y_mm='+encodeURIComponent(y)+'&overlap_mm=5');
+  const overlap = document.getElementById('overlap-'+id).value;
+  const r = await fetch('/api/jobs/'+id+'/continuation-preview?y_mm='+encodeURIComponent(y)+'&overlap_mm='+encodeURIComponent(overlap));
   const body = await r.json();
   const target = document.getElementById('preview-'+id);
   target.hidden = false;
@@ -249,7 +252,8 @@ async function preview(id) {
 }
 async function generate(id) {
   const y = document.getElementById('y-'+id).value;
-  const r = await fetch('/api/jobs/'+id+'/continuation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({y_mm:y,overlap_mm:5})});
+  const overlap = document.getElementById('overlap-'+id).value;
+  const r = await fetch('/api/jobs/'+id+'/continuation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({y_mm:y,overlap_mm:overlap})});
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
 }
 </script>

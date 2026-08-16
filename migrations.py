@@ -76,6 +76,10 @@ def migration_4_add_checkpoint_band_pass(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE checkpoints ADD COLUMN pass_number INTEGER")
 
 
+def migration_5_add_job_overlap(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE jobs ADD COLUMN overlap_mm REAL NOT NULL DEFAULT 5.0")
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -97,6 +101,7 @@ MIGRATIONS: list[Migration] = [
     (2, "add_operational_indexes", migration_2_add_indexes),
     (3, "add_job_status_history", migration_3_add_status_history),
     (4, "add_checkpoint_band_pass", migration_4_add_checkpoint_band_pass),
+    (5, "add_job_overlap", migration_5_add_job_overlap),
 ]
 
 

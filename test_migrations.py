@@ -6,11 +6,12 @@ from migrations import applied_versions, run_migrations
 with tempfile.NamedTemporaryFile(suffix=".sqlite3") as handle:
     conn = sqlite3.connect(handle.name)
     first = run_migrations(conn)
-    assert [version for version, _ in first] == [1, 2, 3, 4]
-    assert applied_versions(conn) == [1, 2, 3, 4]
+    assert [version for version, _ in first] == [1, 2, 3, 4, 5]
+    assert applied_versions(conn) == [1, 2, 3, 4, 5]
+
     second = run_migrations(conn)
     assert second == []
-    assert applied_versions(conn) == [1, 2, 3, 4]
+    assert applied_versions(conn) == [1, 2, 3, 4, 5]
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
         "schema_migrations",
@@ -26,6 +27,8 @@ with tempfile.NamedTemporaryFile(suffix=".sqlite3") as handle:
     assert "idx_status_history_job_id" in status_indexes
     checkpoint_columns = {row[1] for row in conn.execute("PRAGMA table_info(checkpoints)")}
     assert {"logical_band", "pass_number"}.issubset(checkpoint_columns)
+    job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    assert "overlap_mm" in job_columns
 
     conn.close()
-print({"status": "passed", "versions": [1, 2, 3, 4], "second_run": "idempotent"})
+print({"status": "passed", "versions": [1, 2, 3, 4, 5], "second_run": "idempotent"})

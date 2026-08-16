@@ -396,8 +396,8 @@ def create_job():
     form = request.form
     conn = db()
     conn.execute(
-        """INSERT INTO jobs(id,file_name,source_path,source_hash,printer_model,rip_name,media_width_mm,media_length_mm,origin_x_mm,origin_y_mm,scale,resolution,passes,profile,status,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO jobs(id,file_name,source_path,source_hash,printer_model,rip_name,media_width_mm,media_length_mm,origin_x_mm,origin_y_mm,scale,resolution,passes,profile,overlap_mm,status,created_at,updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             job_id,
             safe_name,
@@ -413,6 +413,7 @@ def create_job():
             form.get("resolution", "Not recorded"),
             int(form.get("passes") or 0),
             form.get("profile", "Not recorded"),
+            float(form.get("overlap_mm") or 5.0),
             "READY",
             now(),
             now(),
@@ -959,6 +960,29 @@ def recommendation(job_id):
     )
 
 
+@app.post("/api/jobs/<job_id>/overlap")
+def update_job_overlap(job_id):
+    payload = request.get_json(silent=True) or request.form
+    try:
+        overlap_mm = float(payload.get("overlap_mm", 5))
+        if overlap_mm < 0:
+            raise ValueError("overlap_mm must be non-negative")
+    except (TypeError, ValueError) as error:
+        return error_response(str(error), 400, "INVALID_OVERLAP")
+    conn = db()
+    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    conn.execute(
+        "UPDATE jobs SET overlap_mm=?,updated_at=? WHERE id=?", (overlap_mm, now(), job_id)
+    )
+    record_event(conn, job_id, "JOB_OVERLAP_UPDATED", "operator", {"overlap_mm": overlap_mm})
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, job_id=job_id, overlap_mm=overlap_mm)
+
+
 @app.get("/api/jobs/<job_id>/continuation-preview")
 def continuation_preview(job_id):
     conn = db()
@@ -970,7 +994,7 @@ def continuation_preview(job_id):
     conn.close()
     try:
         selected_y_mm = float(request.args.get("y_mm", checkpoint["y_mm"] if checkpoint else 0))
-        overlap_mm = float(request.args.get("overlap_mm", 5))
+        overlap_mm = float(request.args.get("overlap_mm", job["overlap_mm"] or 5))
         if selected_y_mm < 0 or overlap_mm < 0:
             raise ValueError("y_mm and overlap_mm must be non-negative")
         source_path = Path(job["source_path"])
@@ -978,9 +1002,10 @@ def continuation_preview(job_id):
             if source.height <= 0 or source.width <= 0:
                 raise ValueError("Image has no usable dimensions")
             media_length_mm = max(float(job["media_length_mm"] or source.height), 1.0)
-            selected_px = int(
-                max(0, min(source.height, selected_y_mm / media_length_mm * source.height))
-            )
+            selected_y_mm = min(selected_y_mm, media_length_mm)
+            uncertain_start_mm = max(0.0, selected_y_mm - overlap_mm)
+            uncertain_end_mm = min(media_length_mm, selected_y_mm + overlap_mm)
+            selected_px = int(selected_y_mm / media_length_mm * source.height)
             overlap_px = int(overlap_mm / media_length_mm * source.height)
             uncertain_start_px = max(0, selected_px - overlap_px)
             uncertain_end_px = min(source.height, selected_px + overlap_px)
@@ -1004,8 +1029,24 @@ def continuation_preview(job_id):
                 region_output.append(
                     {
                         "label": label,
-                        "start_y_mm": round(start_px / source.height * media_length_mm, 2),
-                        "end_y_mm": round(end_px / source.height * media_length_mm, 2),
+                        "start_y_mm": round(
+                            (
+                                0.0
+                                if label == "printed"
+                                else (
+                                    uncertain_start_mm if label == "uncertain" else uncertain_end_mm
+                                )
+                            ),
+                            2,
+                        ),
+                        "end_y_mm": round(
+                            (
+                                uncertain_start_mm
+                                if label == "printed"
+                                else (uncertain_end_mm if label == "uncertain" else media_length_mm)
+                            ),
+                            2,
+                        ),
                         "present": end_px > start_px,
                     }
                 )
@@ -1035,12 +1076,15 @@ def continuation(job_id):
     logger.info("continuation_generation_started", extra={"job_id": job_id})
     payload = request.get_json(silent=True) or request.form
     y_mm = float(payload.get("y_mm", 0))
-    overlap_mm = float(payload.get("overlap_mm", 5))
     conn = db()
     job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not job:
         conn.close()
         return jsonify(error="Job not found"), 404
+    overlap_mm = float(payload.get("overlap_mm", job["overlap_mm"] or 5))
+    if overlap_mm < 0:
+        conn.close()
+        return error_response("overlap_mm must be non-negative", 400, "INVALID_OVERLAP")
     source_path = Path(job["source_path"])
     output_name = f"{job_id}_continuation_from_{y_mm:.1f}mm.png"
     output_path = OUTPUT_DIR / output_name
