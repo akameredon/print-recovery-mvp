@@ -25,6 +25,7 @@ from flask import (
 from PIL import Image
 from werkzeug.exceptions import HTTPException
 
+from adapters import SimulatedAdapter
 from config import load_config, resolve_path
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
@@ -778,6 +779,39 @@ def export_raw_events(job_id):
         "\n".join(lines) + ("\n" if lines else ""),
         mimetype="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/jobs/<job_id>/adapter/simulate")
+def simulate_adapter_event(job_id):
+    payload = request.get_json(silent=True) or {}
+    adapter = SimulatedAdapter()
+    try:
+        event = adapter.emit(payload.get("event_type", ""), payload.get("payload", {}))
+    except (TypeError, ValueError) as error:
+        return error_response(str(error), 400, "INVALID_ADAPTER_EVENT")
+    conn = db()
+    job_exists = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job_exists:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    record_event(
+        conn,
+        job_id,
+        f"ADAPTER_{event.event_type}",
+        event.source,
+        {**event.payload, "emitted_at": event.emitted_at},
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(
+        ok=True,
+        job_id=job_id,
+        adapter=adapter.name,
+        event_type=event.event_type,
+        source=event.source,
+        payload=event.payload,
+        emitted_at=event.emitted_at,
     )
 
 
