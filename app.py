@@ -14,10 +14,11 @@ from PIL import Image
 
 from config import load_config, resolve_path
 from logging_utils import configure_logging, set_correlation_id
-from migrations import run_migrations
+from migrations import MIGRATIONS, applied_versions, run_migrations
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = load_config(ROOT)
+APP_VERSION = "0.1.0"
 DATA_DIR = resolve_path(ROOT, CONFIG["data_dir"])
 OUTPUT_DIR = resolve_path(ROOT, CONFIG["output_dir"])
 DB_PATH = DATA_DIR / "print_recovery.sqlite3"
@@ -94,6 +95,57 @@ def latest_checkpoint(conn, job_id):
     return conn.execute(
         "SELECT * FROM checkpoints WHERE job_id=? ORDER BY y_mm DESC, id DESC LIMIT 1", (job_id,)
     ).fetchone()
+
+
+def diagnostics_snapshot():
+    checks = {}
+    try:
+        conn = db()
+        conn.execute("SELECT 1").fetchone()
+        versions = applied_versions(conn)
+        conn.close()
+        expected_versions = [version for version, _, _ in MIGRATIONS]
+        checks["database"] = {"status": "ok", "schema_versions": versions, "expected_versions": expected_versions}
+        if versions != expected_versions:
+            checks["database"] = {"status": "degraded", "schema_versions": versions, "expected_versions": expected_versions}
+    except Exception as error:
+        logger.exception("diagnostics_database_failed")
+        checks["database"] = {"status": "error", "error": str(error)}
+
+    checks["paths"] = {
+        "status": "ok" if DATA_DIR.exists() and OUTPUT_DIR.exists() and os.access(DATA_DIR, os.W_OK) and os.access(OUTPUT_DIR, os.W_OK) else "degraded",
+        "data_dir": str(DATA_DIR),
+        "output_dir": str(OUTPUT_DIR),
+        "log_path": str(LOG_PATH),
+    }
+    overall = "ok" if all(check["status"] == "ok" for check in checks.values()) else "degraded"
+    return {
+        "service": "print-recovery-mvp",
+        "version": APP_VERSION,
+        "status": overall,
+        "timestamp": now(),
+        "checks": checks,
+        "configuration": {
+            "host": CONFIG["host"],
+            "port": CONFIG["port"],
+            "log_level": CONFIG["log_level"],
+            "max_upload_mb": CONFIG["max_upload_mb"],
+        },
+    }
+
+
+@app.get("/healthz")
+def healthz():
+    snapshot = diagnostics_snapshot()
+    status_code = 200 if snapshot["status"] == "ok" else 503
+    return jsonify(snapshot), status_code
+
+
+@app.get("/api/diagnostics")
+def diagnostics():
+    snapshot = diagnostics_snapshot()
+    snapshot["request_correlation_id"] = g.get("correlation_id", "-")
+    return jsonify(snapshot)
 
 
 @app.route("/")
