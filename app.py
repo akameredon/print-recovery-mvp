@@ -14,6 +14,7 @@ from PIL import Image
 
 from config import load_config, resolve_path
 from logging_utils import configure_logging, set_correlation_id
+from migrations import run_migrations
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = load_config(ROOT)
@@ -66,62 +67,11 @@ def db():
 
 def init_db():
     conn = db()
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            file_name TEXT NOT NULL,
-            source_path TEXT NOT NULL,
-            source_hash TEXT NOT NULL,
-            printer_model TEXT,
-            rip_name TEXT,
-            media_width_mm REAL,
-            media_length_mm REAL,
-            origin_x_mm REAL DEFAULT 0,
-            origin_y_mm REAL DEFAULT 0,
-            scale REAL DEFAULT 1,
-            resolution TEXT,
-            passes INTEGER,
-            profile TEXT,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS checkpoints (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL,
-            y_mm REAL NOT NULL,
-            band_mm REAL DEFAULT 1,
-            state TEXT NOT NULL,
-            evidence TEXT NOT NULL,
-            confidence TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(job_id) REFERENCES jobs(id)
-        );
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            source TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(job_id) REFERENCES jobs(id)
-        );
-        CREATE TABLE IF NOT EXISTS decisions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL,
-            selected_y_mm REAL,
-            overlap_mm REAL,
-            mode TEXT NOT NULL,
-            recommendation TEXT NOT NULL,
-            confidence TEXT NOT NULL,
-            operator_action TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(job_id) REFERENCES jobs(id)
-        );
-        """
-    )
-    conn.commit()
+    applied_now = run_migrations(conn)
+    if applied_now:
+        logger.info("database_migrations_applied", extra={"event_type": str(applied_now)})
+    else:
+        logger.debug("database_schema_current")
     conn.close()
 
 
