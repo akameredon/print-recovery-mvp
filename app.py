@@ -1174,6 +1174,92 @@ def registration_strip(job_id):
     )
 
 
+@app.get("/api/jobs/<job_id>/registration-strip/review")
+def registration_strip_review_summary(job_id):
+    conn = db()
+    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    reviews = []
+    for row in conn.execute(
+        "SELECT * FROM events WHERE job_id=? AND event_type='REGISTRATION_STRIP_REVIEWED' ORDER BY id",
+        (job_id,),
+    ).fetchall():
+        try:
+            details = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            details = {"raw": row["payload"]}
+        reviews.append(
+            {
+                "id": row["id"],
+                "timestamp": row["created_at"],
+                "source": row["source"],
+                "details": details,
+            }
+        )
+    conn.close()
+    latest = reviews[-1] if reviews else None
+    return jsonify(
+        ok=True,
+        job_id=job_id,
+        review_state=latest["details"]["result"] if latest else "pending",
+        latest_review=latest,
+        reviews=reviews,
+        operator_confirmation_required=latest is None,
+    )
+
+
+@app.post("/api/jobs/<job_id>/registration-strip/review")
+def review_registration_strip(job_id):
+    payload = request.get_json(silent=True) or request.form
+    result = str(payload.get("result", "")).strip().lower()
+    note = str(payload.get("note", "")).strip()
+    file_name = str(payload.get("file", "")).strip()
+    if result not in {"aligned", "misaligned", "uncertain"}:
+        return error_response(
+            "result must be aligned, misaligned or uncertain",
+            400,
+            "INVALID_REGISTRATION_RESULT",
+        )
+    if len(note) > 1000:
+        return error_response("note must be 1000 characters or fewer", 400, "INVALID_REVIEW_NOTE")
+    conn = db()
+    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    if not file_name:
+        latest_strip = conn.execute(
+            "SELECT payload FROM events WHERE job_id=? AND event_type='REGISTRATION_STRIP_GENERATED' ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        if latest_strip:
+            try:
+                file_name = json.loads(latest_strip["payload"])["file"]
+            except (TypeError, KeyError, json.JSONDecodeError):
+                file_name = ""
+    if not file_name:
+        conn.close()
+        return error_response(
+            "Generate a registration strip before reviewing it", 409, "NO_REGISTRATION_STRIP"
+        )
+    generated = conn.execute(
+        "SELECT 1 FROM events WHERE job_id=? AND event_type='REGISTRATION_STRIP_GENERATED' AND payload LIKE ? LIMIT 1",
+        (job_id, f'%"file": "{file_name}"%'),
+    ).fetchone()
+    if not generated:
+        conn.close()
+        return error_response(
+            "Registration strip does not belong to this job", 400, "UNKNOWN_REGISTRATION_STRIP"
+        )
+    details = {"result": result, "note": note, "file": file_name}
+    record_event(conn, job_id, "REGISTRATION_STRIP_REVIEWED", "operator", details)
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, job_id=job_id, **details, operator_confirmation_required=False)
+
+
 @app.post("/api/jobs/<job_id>/continuation")
 def continuation(job_id):
     logger.info("continuation_generation_started", extra={"job_id": job_id})

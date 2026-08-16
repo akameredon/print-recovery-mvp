@@ -132,6 +132,9 @@
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
           <button class="secondary" onclick="validateOrientation('{{job.id}}')">Validate image orientation and origin</button>
           <button class="secondary" onclick="registrationStrip('{{job.id}}')">Generate registration strip</button>
+          <button class="secondary" onclick="reviewRegistrationStrip('{{job.id}}','aligned')">Confirm strip aligned</button>
+          <button class="warning" onclick="reviewRegistrationStrip('{{job.id}}','misaligned')">Mark strip misaligned</button>
+          <button class="secondary" onclick="reviewRegistrationStrip('{{job.id}}','uncertain')">Mark strip uncertain</button>
           <button class="secondary" onclick="timeline('{{job.id}}')">Show evidence timeline</button>
           <a href="/api/jobs/{{job.id}}/events/raw" download>Download raw events</a>
           <button class="secondary" onclick="checkpointMap('{{job.id}}')">Show checkpoint map</button>
@@ -167,6 +170,11 @@
     {% endfor %}
   </section>
 <script>
+async function reviewRegistrationStrip(id, result) {
+  const note = window.prompt('Optional registration-strip review note:') || '';
+  const r = await fetch('/api/jobs/'+id+'/registration-strip/review', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({result, note})});
+  document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
+}
 async function registrationStrip(id) {
   const y = document.getElementById('y-'+id).value;
   const overlap = document.getElementById('overlap-'+id).value;
