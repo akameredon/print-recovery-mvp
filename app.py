@@ -400,6 +400,62 @@ def source_integrity(job_id):
     return jsonify(body), response_code
 
 
+@app.get("/api/jobs/<job_id>/readiness")
+def recovery_readiness(job_id):
+    conn = db()
+    job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+
+    source_path = Path(job["source_path"])
+    source_exists = source_path.exists()
+    actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_exists else None
+    integrity = (
+        "missing"
+        if not source_exists
+        else ("verified" if actual_hash == job["source_hash"] else "changed")
+    )
+    checkpoint = latest_checkpoint(conn, job_id)
+    interruption = conn.execute(
+        "SELECT * FROM job_status_history WHERE job_id=? AND to_status='INTERRUPTED' ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    checkpoint_dict = row_dict(checkpoint)
+    interruption_dict = row_dict(interruption)
+
+    if integrity != "verified":
+        readiness = "blocked"
+        reason = "Source file integrity must be restored or reviewed before recovery."
+    elif not checkpoint:
+        readiness = "blocked"
+        reason = "No checkpoint has been recorded for this job."
+    elif not interruption:
+        readiness = "review_required"
+        reason = "A checkpoint exists, but no interruption record has been captured."
+    else:
+        readiness = "ready_for_operator_review"
+        reason = "Source integrity, checkpoint evidence and interruption history are present."
+
+    response = {
+        "job_id": job_id,
+        "readiness": readiness,
+        "reason": reason,
+        "job_status": job["status"],
+        "source_integrity": {
+            "status": integrity,
+            "expected_hash": job["source_hash"],
+            "actual_hash": actual_hash,
+        },
+        "checkpoint": checkpoint_dict,
+        "interruption": interruption_dict,
+        "operator_confirmation_required": True,
+        "request_correlation_id": g.get("correlation_id", "-"),
+    }
+    conn.close()
+    return jsonify(response)
+
+
 @app.get("/api/jobs/<job_id>/status-history")
 def status_history(job_id):
     try:
