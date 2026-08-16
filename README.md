@@ -12,6 +12,10 @@ python3 app.py
 
 Open `http://127.0.0.1:5173` in a browser. Create a test job with an image and media dimensions, record one or more checkpoints, mark an interruption, review the recommendation and generate a continuation image.
 
+## Roadmap
+
+See [docs/100-day-roadmap.md](docs/100-day-roadmap.md) for the one-improvement-per-day plan from MVP toward a multi-user beta.
+
 ## Current status
 
 The prototype is **generated but not printer-validated**. It does not read a real RIP protocol, control a printer, prove physical ink position or guarantee continuation quality. It is intentionally safe and local: no printer-control commands are sent.
