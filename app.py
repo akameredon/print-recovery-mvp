@@ -28,6 +28,7 @@ from werkzeug.exceptions import HTTPException
 from adapters import SimulatedAdapter
 from checkpoint_confidence import calculate_checkpoint_confidence
 from config import load_config, resolve_path
+from interruption_classification import classify_interruption
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 
@@ -515,6 +516,7 @@ def interrupt(job_id):
             "note must be 1000 characters or fewer", 400, "INVALID_INTERRUPTION_NOTE"
         )
     event_type = str(payload.get("event_type", reason)).strip() or reason
+    classification = classify_interruption(reason, note, source)
     conn = db()
     job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not job:
@@ -526,11 +528,17 @@ def interrupt(job_id):
         job_id,
         event_type,
         source,
-        {"reason": reason, "note": note},
+        {"reason": reason, "note": note, "classification": classification},
     )
     conn.commit()
     conn.close()
-    return jsonify(ok=True, status="INTERRUPTED", reason=reason, note=note)
+    return jsonify(
+        ok=True,
+        status="INTERRUPTED",
+        reason=reason,
+        note=note,
+        classification=classification,
+    )
 
 
 @app.get("/api/jobs/<job_id>")
