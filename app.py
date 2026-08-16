@@ -181,12 +181,36 @@ def latest_checkpoint(conn, job_id):
     ).fetchone()
 
 
+def clock_consistency_check(conn, threshold_seconds=5.0, application_timestamp=None):
+    application_time = datetime.fromisoformat(
+        (application_timestamp or now()).replace("Z", "+00:00")
+    )
+    database_value = conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')").fetchone()[0]
+    database_time = datetime.fromisoformat(database_value)
+    drift_seconds = round(abs((application_time - database_time).total_seconds()), 3)
+    status = "ok" if drift_seconds <= threshold_seconds else "warning"
+    return {
+        "status": status,
+        "clock_source": "application_utc_and_sqlite_utc",
+        "application_timestamp": application_time.isoformat(),
+        "database_timestamp": database_time.isoformat(),
+        "drift_seconds": drift_seconds,
+        "warning_threshold_seconds": threshold_seconds,
+        "message": (
+            "Clock sources are consistent"
+            if status == "ok"
+            else "Clock-source drift may affect event ordering"
+        ),
+    }
+
+
 def diagnostics_snapshot():
     checks = {}
     try:
         conn = db()
         conn.execute("SELECT 1").fetchone()
         versions = applied_versions(conn)
+        clock_check = clock_consistency_check(conn)
         conn.close()
         expected_versions = [version for version, _, _ in MIGRATIONS]
         checks["database"] = {
@@ -200,6 +224,7 @@ def diagnostics_snapshot():
                 "schema_versions": versions,
                 "expected_versions": expected_versions,
             }
+        checks["clock"] = clock_check
     except Exception as error:
         logger.exception("diagnostics_database_failed")
         checks["database"] = {"status": "error", "error": str(error)}
