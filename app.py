@@ -39,6 +39,7 @@ from output_naming import continuation_output_name
 from recovery_report import render_recovery_report
 from recovery_safety import assess_recovery_safety
 from registration_strip import generate_registration_strip
+from signal_matrix import assess_signal_matrix
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = load_config(ROOT)
@@ -944,6 +945,33 @@ def export_raw_events(job_id):
         mimetype="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/api/jobs/<job_id>/signals/assess")
+def assess_job_signals(job_id):
+    payload = request.get_json(silent=True) or {}
+    signals = payload.get("signals")
+    source = (
+        str(payload.get("source", "operator_signal_assessment")).strip()
+        or "operator_signal_assessment"
+    )
+    if not isinstance(signals, list):
+        return error_response("signals must be a list", 400, "INVALID_SIGNAL_LIST")
+    assessment = assess_signal_matrix(signals)
+    conn = db()
+    if not conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    record_event(
+        conn,
+        job_id,
+        "SIGNAL_MATRIX_ASSESSED",
+        source,
+        {"source": source, "signals": signals, "assessment": assessment},
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, job_id=job_id, source=source, assessment=assessment)
 
 
 @app.post("/api/jobs/<job_id>/lifecycle/observe")
