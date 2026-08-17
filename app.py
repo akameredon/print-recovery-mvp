@@ -338,12 +338,90 @@ def require_roles(conn, allowed_roles):
     if not user:
         return None, error_response("Authentication is required", 401, "AUTHENTICATION_REQUIRED")
     if user["role"] not in allowed_roles:
+        record_audit(
+            conn, "PERMISSION_DENIED", "authorization", None, {"role": user["role"]}, actor=user
+        )
+        conn.commit()
         return None, error_response(
             "This action requires technician or owner permissions",
             403,
             "ROLE_FORBIDDEN",
         )
     return user, None
+
+
+def record_audit(conn, action, resource_type, resource_id=None, details=None, actor=None):
+    actor = actor or current_user(conn)
+    conn.execute(
+        """INSERT INTO audit_log(actor_user_id,actor_username,actor_role,action,resource_type,resource_id,details,created_at)
+        VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            actor.get("id") if actor else None,
+            actor.get("username") if actor else None,
+            actor.get("role") if actor else None,
+            action,
+            resource_type,
+            resource_id,
+            json.dumps(details or {}, sort_keys=True),
+            now(),
+        ),
+    )
+
+
+@app.get("/api/audit-log")
+def audit_log_list():
+    conn = db()
+    actor = current_user(conn)
+    if not actor:
+        conn.close()
+        return error_response("Authentication is required", 401, "AUTHENTICATION_REQUIRED")
+    try:
+        limit = min(max(int(request.args.get("limit", 100)), 1), 500)
+    except ValueError:
+        return error_response("limit must be an integer", 400, "INVALID_AUDIT_QUERY")
+    action = request.args.get("action", "").strip()
+    resource_type = request.args.get("resource_type", "").strip()
+    actor_username = request.args.get("actor", "").strip()
+    query_text = request.args.get("q", "").strip()
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+    clauses, params = [], []
+    for value, expression in (
+        (action, "action=?"),
+        (resource_type, "resource_type=?"),
+        (actor_username, "actor_username=?"),
+    ):
+        if value:
+            clauses.append(expression)
+            params.append(value)
+    if query_text:
+        clauses.append(
+            "(action LIKE ? OR resource_type LIKE ? OR resource_id LIKE ? OR details LIKE ?)"
+        )
+        value = f"%{query_text}%"
+        params.extend([value] * 4)
+    for value, operator in ((date_from, ">="), (date_to, "<=")):
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                return error_response(
+                    "date filters must use YYYY-MM-DD", 400, "INVALID_AUDIT_QUERY"
+                )
+            clauses.append(f"date(created_at) {operator} date(?)")
+            params.append(value)
+    query = "SELECT * FROM audit_log"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    items = []
+    for row in conn.execute(query, params).fetchall():
+        item = row_dict(row)
+        item["details"] = json.loads(item["details"] or "{}")
+        items.append(item)
+    conn.close()
+    return jsonify(items=items, count=len(items), limit=limit)
 
 
 @app.get("/api/users")
@@ -422,14 +500,25 @@ def select_session_user():
         or not row["password_hash"]
         or not check_password_hash(row["password_hash"], password)
     ):
+        record_audit(
+            conn,
+            "LOGIN_FAILED",
+            "user",
+            row["id"] if row else None,
+            {"username": username},
+        )
+        conn.commit()
         conn.close()
         return error_response("invalid username or password", 401, "INVALID_CREDENTIALS")
     login_time = now()
     conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (login_time, row["id"]))
-    conn.commit()
     user = {
         key: row[key] for key in ("id", "username", "display_name", "role", "active", "created_at")
     }
+    record_audit(
+        conn, "LOGIN_SUCCESS", "user", user["id"], {"username": user["username"]}, actor=user
+    )
+    conn.commit()
     conn.close()
     session.clear()
     session["user_id"] = user["id"]
@@ -445,6 +534,12 @@ def login():
 
 @app.delete("/api/session")
 def clear_session_user():
+    conn = db()
+    actor = current_user(conn)
+    if actor:
+        record_audit(conn, "LOGOUT", "user", actor["id"], {}, actor=actor)
+        conn.commit()
+    conn.close()
     session.clear()
     return jsonify(authenticated=False, user=None)
 
@@ -525,7 +620,7 @@ def printer_profiles_list():
 @app.post("/api/printer-profiles")
 def create_printer_profile():
     conn = db()
-    _, auth_error = require_roles(conn, {"technician", "owner"})
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
     if auth_error:
         conn.close()
         return auth_error
@@ -562,6 +657,14 @@ def create_printer_profile():
                 timestamp,
             ),
         )
+        record_audit(
+            conn,
+            "PRINTER_PROFILE_CREATED",
+            "printer_profile",
+            profile_id,
+            {"name": values["name"], "status": values["status"]},
+            actor=actor,
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -591,7 +694,7 @@ def printer_profile_detail(profile_id):
 @app.patch("/api/printer-profiles/<profile_id>")
 def update_printer_profile(profile_id):
     conn = db()
-    _, auth_error = require_roles(conn, {"technician", "owner"})
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
     if auth_error:
         conn.close()
         return auth_error
@@ -627,6 +730,14 @@ def update_printer_profile(profile_id):
                 profile_id,
             ),
         )
+        record_audit(
+            conn,
+            "PRINTER_PROFILE_UPDATED",
+            "printer_profile",
+            profile_id,
+            {"name": values["name"], "status": values["status"]},
+            actor=actor,
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -642,7 +753,7 @@ def update_printer_profile(profile_id):
 @app.delete("/api/printer-profiles/<profile_id>")
 def retire_printer_profile(profile_id):
     conn = db()
-    _, auth_error = require_roles(conn, {"technician", "owner"})
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
     if auth_error:
         conn.close()
         return auth_error
@@ -650,6 +761,10 @@ def retire_printer_profile(profile_id):
         "UPDATE printer_profiles SET active=0,status='retired',updated_at=? WHERE id=? AND active=1",
         (now(), profile_id),
     ).rowcount
+    if updated:
+        record_audit(
+            conn, "PRINTER_PROFILE_RETIRED", "printer_profile", profile_id, {}, actor=actor
+        )
     conn.commit()
     conn.close()
     if not updated:

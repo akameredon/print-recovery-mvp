@@ -127,6 +127,26 @@ def migration_9_add_printer_profiles(conn: sqlite3.Connection) -> None:
         """)
 
 
+def migration_10_add_audit_log(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_user_id TEXT,
+            actor_username TEXT,
+            actor_role TEXT,
+            action TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT,
+            details TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(actor_user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id);
+        """)
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -153,6 +173,7 @@ MIGRATIONS: list[Migration] = [
     (7, "add_local_users", migration_7_add_local_users),
     (8, "add_password_auth", migration_8_add_password_auth),
     (9, "add_printer_profiles", migration_9_add_printer_profiles),
+    (10, "add_audit_log", migration_10_add_audit_log),
 ]
 
 
