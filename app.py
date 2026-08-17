@@ -1096,6 +1096,97 @@ def retire_adapter_configuration(configuration_id):
     return jsonify(configuration_id=configuration_id, status="retired")
 
 
+@app.get("/api/outcomes")
+def owner_outcomes():
+    conn = db()
+    owner, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    workspace_id = owner["workspace_id"]
+    date_from = request.args.get("date_from", "").strip()
+    date_to = request.args.get("date_to", "").strip()
+    clauses = ["j.workspace_id=?"]
+    params = [workspace_id]
+    for value, operator in ((date_from, ">="), (date_to, "<=")):
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                conn.close()
+                return error_response(
+                    "date filters must use YYYY-MM-DD", 400, "INVALID_OUTCOME_QUERY"
+                )
+            clauses.append(f"date(j.created_at) {operator} date(?)")
+            params.append(value)
+    where = " AND ".join(clauses)
+    jobs = conn.execute(f"SELECT j.* FROM jobs j WHERE {where}", params).fetchall()
+    decisions = conn.execute(
+        f"SELECT d.*, j.media_width_mm, j.media_length_mm FROM decisions d JOIN jobs j ON j.id=d.job_id WHERE {where}",
+        params,
+    ).fetchall()
+    interrupted_jobs = conn.execute(
+        f"SELECT COUNT(DISTINCT e.job_id) FROM events e JOIN jobs j ON j.id=e.job_id WHERE {where} AND e.event_type='INTERRUPTED'",
+        params,
+    ).fetchone()[0]
+    approved_reviews = 0
+    rejected_reviews = 0
+    for row in conn.execute(
+        f"SELECT e.payload FROM events e JOIN jobs j ON j.id=e.job_id WHERE {where} AND e.event_type='RECOVERY_REVIEWED'",
+        params,
+    ).fetchall():
+        try:
+            action = json.loads(row["payload"] or "{}").get("action")
+        except json.JSONDecodeError:
+            action = None
+        if action == "approved":
+            approved_reviews += 1
+        elif action == "rejected":
+            rejected_reviews += 1
+    conn.close()
+    total_area_mm2 = sum(
+        float(row["media_width_mm"] or 0) * float(row["media_length_mm"] or 0) for row in jobs
+    )
+    continuation_count = 0
+    restart_count = 0
+    test_first_count = 0
+    saved_area_mm2 = 0.0
+    waste_area_mm2 = 0.0
+    for row in decisions:
+        action = (row["operator_action"] or "").lower()
+        area = float(row["media_width_mm"] or 0) * float(row["media_length_mm"] or 0)
+        if "generated_continuation" in action:
+            continuation_count += 1
+            saved_area_mm2 += float(row["media_width_mm"] or 0) * max(
+                float(row["selected_y_mm"] or 0), 0
+            )
+        if "restart" in action:
+            restart_count += 1
+            waste_area_mm2 += area
+        if "test_first" in action:
+            test_first_count += 1
+    return jsonify(
+        workspace_id=workspace_id,
+        filters={"date_from": date_from, "date_to": date_to},
+        metrics={
+            "total_jobs": len(jobs),
+            "interrupted_jobs": interrupted_jobs,
+            "recovery_decisions": len(decisions),
+            "approved_reviews": approved_reviews,
+            "rejected_reviews": rejected_reviews,
+            "continuations_generated": continuation_count,
+            "restart_actions": restart_count,
+            "test_first_actions": test_first_count,
+            "total_material_area_mm2": round(total_area_mm2, 2),
+            "estimated_material_saved_area_mm2": round(saved_area_mm2, 2),
+            "estimated_waste_area_mm2": round(waste_area_mm2, 2),
+            "estimated_material_saved_m2": round(saved_area_mm2 / 1_000_000, 4),
+            "estimated_waste_m2": round(waste_area_mm2 / 1_000_000, 4),
+        },
+        measurement_boundary="Software-recorded estimates from job dimensions and recovery decisions; not a physical material measurement.",
+    )
+
+
 JOB_FILTERS = {
     "all": None,
     "active": ("READY", "PRINTING", "RECOVERY_READY", "RECOVERING"),

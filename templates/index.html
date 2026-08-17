@@ -38,6 +38,10 @@
     .audit-panel { margin-top:14px; padding:12px; border:1px solid #dce3ea; border-radius:7px; background:#101820; color:#dce9f3; }
     .audit-panel input, .audit-panel select { color:#18212b; background:white; }
     .adapter-panel { margin-top:14px; padding:12px; border:1px solid #b9c9d8; border-radius:7px; background:#eef5fb; }
+    .outcomes-panel { margin-top:14px; padding:12px; border:1px solid #c9b77d; border-radius:7px; background:#fffaf0; }
+    .metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:10px; }
+    .metric { padding:10px; border:1px solid #e4d9b8; border-radius:6px; background:#fff; }
+    .metric strong { display:block; font-size:1.2rem; }
     .continuation-preview { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
     .continuation-preview img { max-width:100%; height:auto; display:block; border:1px solid #c9d4df; }
     .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
@@ -110,6 +114,17 @@
     <div class="profile-list" aria-live="polite">
       {% if adapters %}{% for adapter in adapters %}<div class="profile-item"><strong>{{ adapter.name }}</strong> — {{ adapter.adapter_type }} / {{ adapter.connection_mode }}<br><span class="muted">{{ adapter.status }} · {{ 'enabled' if adapter.enabled else 'disabled' }} · {{ adapter.trace_or_endpoint }}</span></div>{% endfor %}{% else %}<p class="muted">No adapter configurations stored in this workspace.</p>{% endif %}
     </div>
+  </section>
+
+  <section class="outcomes-panel" aria-labelledby="outcomes-title">
+    <h2 id="outcomes-title">Owner outcomes dashboard</h2>
+    {% if active_user and active_user.role == 'owner' %}
+    <p>Review workspace-level recovery outcomes and software-recorded material estimates.</p>
+    <div class="grid"><label>From<input id="outcomes-from" type="date"></label><label>To<input id="outcomes-to" type="date"></label></div>
+    <button type="button" class="secondary" onclick="loadOutcomes()">Load outcomes</button>
+    <div id="outcomes-metrics" class="metric-grid" aria-live="polite"><div class="metric">Load the owner summary.</div></div>
+    <p id="outcomes-boundary" class="muted">The estimates are calculated from stored dimensions and recovery decisions; they are not physical material measurements.</p>
+    {% else %}<p>Owner permission is required to view workspace waste and recovery outcomes.</p>{% endif %}
   </section>
 
   <section class="audit-panel" aria-labelledby="audit-title">
@@ -250,6 +265,20 @@
     {% endfor %}
   </section>
 <script>
+async function loadOutcomes() {
+  const params = new URLSearchParams();
+  const from = document.getElementById('outcomes-from').value;
+  const to = document.getElementById('outcomes-to').value;
+  if (from) params.set('date_from', from);
+  if (to) params.set('date_to', to);
+  const r = await fetch('/api/outcomes?'+params.toString());
+  const body = await r.json();
+  if (!r.ok) { document.getElementById('outcomes-metrics').textContent = body.message || 'Unable to load outcomes.'; return; }
+  const m = body.metrics;
+  const cards = [['Jobs', m.total_jobs], ['Interrupted', m.interrupted_jobs], ['Saved (m²)', m.estimated_material_saved_m2], ['Waste (m²)', m.estimated_waste_m2], ['Continuations', m.continuations_generated], ['Restarts', m.restart_actions], ['Approved', m.approved_reviews], ['Rejected', m.rejected_reviews]];
+  document.getElementById('outcomes-metrics').innerHTML = cards.map(card => '<div class="metric"><strong>'+card[1]+'</strong><span>'+card[0]+'</span></div>').join('');
+  document.getElementById('outcomes-boundary').textContent = body.measurement_boundary;
+}
 async function createAdapterConfiguration(event) {
   event.preventDefault();
   let settings;
