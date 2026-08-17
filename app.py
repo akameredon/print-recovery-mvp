@@ -865,6 +865,237 @@ def retire_printer_profile(profile_id):
     return jsonify(profile_id=profile_id, status="retired")
 
 
+ADAPTER_TYPES = {"generic_rip_observer", "simulated_adapter", "hotfolder_observer"}
+ADAPTER_CONNECTION_MODES = {"trace_file", "hotfolder", "observed_queue"}
+
+
+def adapter_payload(payload):
+    name = str(payload.get("name", "")).strip()
+    adapter_type = str(payload.get("adapter_type", "")).strip().lower()
+    connection_mode = str(payload.get("connection_mode", "")).strip().lower()
+    trace_or_endpoint = str(payload.get("trace_or_endpoint", "")).strip()
+    status = str(payload.get("status", "draft")).strip().lower() or "draft"
+    if not name or len(name) > 120:
+        return None, error_response(
+            "adapter name is required and must be 120 characters or fewer",
+            400,
+            "INVALID_ADAPTER_CONFIGURATION",
+        )
+    if adapter_type not in ADAPTER_TYPES:
+        return None, error_response(
+            "unsupported adapter_type", 400, "INVALID_ADAPTER_CONFIGURATION"
+        )
+    if connection_mode not in ADAPTER_CONNECTION_MODES or not trace_or_endpoint:
+        return None, error_response(
+            "connection_mode and trace_or_endpoint are required",
+            400,
+            "INVALID_ADAPTER_CONFIGURATION",
+        )
+    if status not in {"draft", "ready", "retired"}:
+        return None, error_response(
+            "status must be draft, ready or retired", 400, "INVALID_ADAPTER_CONFIGURATION"
+        )
+    settings = payload.get("settings", {})
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings)
+        except json.JSONDecodeError:
+            return None, error_response(
+                "settings must be a JSON object", 400, "INVALID_ADAPTER_CONFIGURATION"
+            )
+    if not isinstance(settings, dict):
+        return None, error_response(
+            "settings must be a JSON object", 400, "INVALID_ADAPTER_CONFIGURATION"
+        )
+    forbidden = {"password", "secret", "token", "api_key", "private_key"}
+    if any(any(term in str(key).lower() for term in forbidden) for key in settings):
+        return None, error_response(
+            "secrets are not stored in adapter configuration", 400, "SECRET_NOT_ALLOWED"
+        )
+    return {
+        "name": name,
+        "adapter_type": adapter_type,
+        "printer_profile_id": str(payload.get("printer_profile_id", "")).strip() or None,
+        "connection_mode": connection_mode,
+        "trace_or_endpoint": trace_or_endpoint,
+        "settings": settings,
+        "status": status,
+        "enabled": bool(payload.get("enabled", False)),
+    }, None
+
+
+def public_adapter(row):
+    item = row_dict(row)
+    if item:
+        item["settings"] = json.loads(item["settings"] or "{}")
+        item["enabled"] = bool(item["enabled"])
+    return item
+
+
+@app.get("/api/adapter-configurations")
+def adapter_configurations_list():
+    conn = db()
+    actor = current_user(conn)
+    if not actor:
+        conn.close()
+        return error_response("Authentication is required", 401, "AUTHENTICATION_REQUIRED")
+    items = [
+        public_adapter(row)
+        for row in conn.execute(
+            "SELECT * FROM adapter_configurations WHERE workspace_id=? AND status!='retired' ORDER BY name",
+            (actor["workspace_id"],),
+        ).fetchall()
+    ]
+    conn.close()
+    return jsonify(configurations=items, count=len(items))
+
+
+@app.post("/api/adapter-configurations")
+def create_adapter_configuration():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    values, error = adapter_payload(request.get_json(silent=True) or request.form)
+    if error:
+        conn.close()
+        return error
+    item_id = uuid.uuid4().hex[:12]
+    try:
+        conn.execute(
+            """INSERT INTO adapter_configurations(id,workspace_id,name,adapter_type,printer_profile_id,connection_mode,trace_or_endpoint,settings,status,enabled,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                item_id,
+                actor["workspace_id"],
+                values["name"],
+                values["adapter_type"],
+                values["printer_profile_id"],
+                values["connection_mode"],
+                values["trace_or_endpoint"],
+                json.dumps(values["settings"], sort_keys=True),
+                values["status"],
+                int(values["enabled"]),
+                now(),
+                now(),
+            ),
+        )
+        record_audit(
+            conn,
+            "ADAPTER_CONFIGURATION_CREATED",
+            "adapter_configuration",
+            item_id,
+            {"name": values["name"], "adapter_type": values["adapter_type"]},
+            actor=actor,
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return error_response(
+            "adapter configuration name already exists in this workspace",
+            409,
+            "ADAPTER_CONFIGURATION_EXISTS",
+        )
+    item = public_adapter(
+        conn.execute("SELECT * FROM adapter_configurations WHERE id=?", (item_id,)).fetchone()
+    )
+    conn.close()
+    return jsonify(configuration=item), 201
+
+
+@app.patch("/api/adapter-configurations/<configuration_id>")
+def update_adapter_configuration(configuration_id):
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    values, error = adapter_payload(request.get_json(silent=True) or request.form)
+    if error:
+        conn.close()
+        return error
+    if not conn.execute(
+        "SELECT 1 FROM adapter_configurations WHERE id=? AND workspace_id=?",
+        (configuration_id, actor["workspace_id"]),
+    ).fetchone():
+        conn.close()
+        return error_response(
+            "adapter configuration not found", 404, "ADAPTER_CONFIGURATION_NOT_FOUND"
+        )
+    try:
+        conn.execute(
+            """UPDATE adapter_configurations SET name=?,adapter_type=?,printer_profile_id=?,connection_mode=?,trace_or_endpoint=?,settings=?,status=?,enabled=?,updated_at=? WHERE id=? AND workspace_id=?""",
+            (
+                values["name"],
+                values["adapter_type"],
+                values["printer_profile_id"],
+                values["connection_mode"],
+                values["trace_or_endpoint"],
+                json.dumps(values["settings"], sort_keys=True),
+                values["status"],
+                int(values["enabled"]),
+                now(),
+                configuration_id,
+                actor["workspace_id"],
+            ),
+        )
+        record_audit(
+            conn,
+            "ADAPTER_CONFIGURATION_UPDATED",
+            "adapter_configuration",
+            configuration_id,
+            {"name": values["name"], "adapter_type": values["adapter_type"]},
+            actor=actor,
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return error_response(
+            "adapter configuration name already exists in this workspace",
+            409,
+            "ADAPTER_CONFIGURATION_EXISTS",
+        )
+    item = public_adapter(
+        conn.execute(
+            "SELECT * FROM adapter_configurations WHERE id=?", (configuration_id,)
+        ).fetchone()
+    )
+    conn.close()
+    return jsonify(configuration=item)
+
+
+@app.delete("/api/adapter-configurations/<configuration_id>")
+def retire_adapter_configuration(configuration_id):
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    updated = conn.execute(
+        "UPDATE adapter_configurations SET status='retired',enabled=0,updated_at=? WHERE id=? AND workspace_id=?",
+        (now(), configuration_id, actor["workspace_id"]),
+    ).rowcount
+    if updated:
+        record_audit(
+            conn,
+            "ADAPTER_CONFIGURATION_RETIRED",
+            "adapter_configuration",
+            configuration_id,
+            {},
+            actor=actor,
+        )
+    conn.commit()
+    conn.close()
+    if not updated:
+        return error_response(
+            "adapter configuration not found", 404, "ADAPTER_CONFIGURATION_NOT_FOUND"
+        )
+    return jsonify(configuration_id=configuration_id, status="retired")
+
+
 JOB_FILTERS = {
     "all": None,
     "active": ("READY", "PRINTING", "RECOVERY_READY", "RECOVERING"),
@@ -967,6 +1198,13 @@ def index():
                 "SELECT * FROM printer_profiles WHERE active=1 ORDER BY name"
             ).fetchall()
         ]
+        adapters = [
+            public_adapter(row)
+            for row in conn.execute(
+                "SELECT * FROM adapter_configurations WHERE workspace_id=? AND status!='retired' ORDER BY name",
+                (current_workspace_id(conn),),
+            ).fetchall()
+        ]
         conn.close()
     except ValueError as error:
         return error_response(str(error), 400, "INVALID_JOB_QUERY")
@@ -976,6 +1214,7 @@ def index():
         users=users,
         active_user=active_user,
         profiles=profiles,
+        adapters=adapters,
         checkpoint_interval_mm=CONFIG["checkpoint_interval_mm"],
         **values,
     )

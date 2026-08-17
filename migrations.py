@@ -167,6 +167,28 @@ def migration_11_add_workspaces(conn: sqlite3.Connection) -> None:
         """)
 
 
+def migration_12_add_adapter_configurations(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS adapter_configurations (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            adapter_type TEXT NOT NULL,
+            printer_profile_id TEXT,
+            connection_mode TEXT NOT NULL,
+            trace_or_endpoint TEXT NOT NULL,
+            settings TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'draft',
+            enabled INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, name),
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_adapter_config_workspace ON adapter_configurations(workspace_id, enabled);
+        """)
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -195,6 +217,7 @@ MIGRATIONS: list[Migration] = [
     (9, "add_printer_profiles", migration_9_add_printer_profiles),
     (10, "add_audit_log", migration_10_add_audit_log),
     (11, "add_workspaces", migration_11_add_workspaces),
+    (12, "add_adapter_configurations", migration_12_add_adapter_configurations),
 ]
 
 

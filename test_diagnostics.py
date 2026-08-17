@@ -5,7 +5,20 @@ health = requests.get(BASE + "/healthz", headers={"X-Correlation-ID": "day5-heal
 assert health.status_code == 200, health.text
 health_body = health.json()
 assert health_body["status"] == "ok"
-assert health_body["checks"]["database"]["schema_versions"] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+assert health_body["checks"]["database"]["schema_versions"] == [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+]
 assert health_body["checks"]["paths"]["status"] == "ok"
 assert "request_correlation_id" not in health_body
 assert health.headers.get("X-Correlation-ID") == "day5-health-test"

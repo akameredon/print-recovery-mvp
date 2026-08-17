@@ -37,6 +37,7 @@
     .profile-item { padding:8px; border:1px solid #dce3ea; border-radius:6px; background:#f7fafc; }
     .audit-panel { margin-top:14px; padding:12px; border:1px solid #dce3ea; border-radius:7px; background:#101820; color:#dce9f3; }
     .audit-panel input, .audit-panel select { color:#18212b; background:white; }
+    .adapter-panel { margin-top:14px; padding:12px; border:1px solid #b9c9d8; border-radius:7px; background:#eef5fb; }
     .continuation-preview { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
     .continuation-preview img { max-width:100%; height:auto; display:block; border:1px solid #c9d4df; }
     .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
@@ -91,6 +92,23 @@
     </form>
     <div class="profile-list" aria-live="polite">
       {% if profiles %}{% for profile in profiles %}<div class="profile-item"><strong>{{ profile.name }}</strong> — {{ profile.manufacturer }} {{ profile.printer_model }} / {{ profile.rip_name }} {{ profile.rip_version }}<br><span class="muted">{{ profile.status }} · assisted_only · signals: {{ profile.observable_signals|join(', ') if profile.observable_signals else 'none recorded' }}</span></div>{% endfor %}{% else %}<p class="muted">No printer profiles stored yet.</p>{% endif %}
+    </div>
+  </section>
+
+  <section class="adapter-panel" aria-labelledby="adapter-title">
+    <h2 id="adapter-title">Adapter configuration</h2>
+    <p>Technicians and owners may configure an adapter boundary for this workspace. Operators can review status but cannot save changes. Secrets are intentionally not accepted here.</p>
+    <form onsubmit="createAdapterConfiguration(event)" class="grid">
+      <label>Name<input id="adapter-name" required placeholder="RasterLink observer"></label>
+      <label>Adapter type<select id="adapter-type"><option value="generic_rip_observer">Generic RIP observer</option><option value="simulated_adapter">Simulated adapter</option><option value="hotfolder_observer">Hot-folder observer</option></select></label>
+      <label>Connection mode<select id="adapter-mode"><option value="trace_file">Trace file</option><option value="hotfolder">Hot-folder</option><option value="observed_queue">Observed queue</option></select></label>
+      <label>Trace or endpoint<input id="adapter-endpoint" required placeholder="/var/lib/print-recovery/rip-trace.jsonl"></label>
+      <label>Settings JSON<textarea id="adapter-settings">{}</textarea></label>
+      <label>Status<select id="adapter-status"><option value="draft">Draft</option><option value="ready">Ready</option></select></label>
+      <div><button type="submit">Save adapter configuration</button></div>
+    </form>
+    <div class="profile-list" aria-live="polite">
+      {% if adapters %}{% for adapter in adapters %}<div class="profile-item"><strong>{{ adapter.name }}</strong> — {{ adapter.adapter_type }} / {{ adapter.connection_mode }}<br><span class="muted">{{ adapter.status }} · {{ 'enabled' if adapter.enabled else 'disabled' }} · {{ adapter.trace_or_endpoint }}</span></div>{% endfor %}{% else %}<p class="muted">No adapter configurations stored in this workspace.</p>{% endif %}
     </div>
   </section>
 
@@ -232,6 +250,15 @@
     {% endfor %}
   </section>
 <script>
+async function createAdapterConfiguration(event) {
+  event.preventDefault();
+  let settings;
+  try { settings = JSON.parse(document.getElementById('adapter-settings').value || '{}'); } catch (error) { document.getElementById('audit-output').textContent = 'Settings must be valid JSON.'; return; }
+  const payload = {name: document.getElementById('adapter-name').value, adapter_type: document.getElementById('adapter-type').value, connection_mode: document.getElementById('adapter-mode').value, trace_or_endpoint: document.getElementById('adapter-endpoint').value, settings, status: document.getElementById('adapter-status').value, enabled: false};
+  const r = await fetch('/api/adapter-configurations', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const body = await r.json();
+  if (r.ok) location.reload(); else document.getElementById('audit-output').textContent = body.message || 'Unable to save adapter configuration.';
+}
 async function loadAuditLog() {
   const params = new URLSearchParams();
   const q = document.getElementById('audit-q').value;
