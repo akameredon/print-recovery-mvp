@@ -20,6 +20,7 @@ from flask import (
     render_template,
     request,
     send_from_directory,
+    session,
     url_for,
 )
 from PIL import Image, ImageDraw
@@ -56,6 +57,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 logger = configure_logging(str(LOG_PATH), CONFIG["log_level"])
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = CONFIG["max_upload_mb"] * 1024 * 1024
+app.secret_key = os.environ.get("PRINT_RECOVERY_SESSION_SECRET", "day61-local-session-key")
 
 
 @app.before_request
@@ -297,6 +299,105 @@ INTERRUPTION_REASONS = {
 }
 
 
+USER_ROLES = {"operator", "technician", "owner"}
+
+
+def current_user(conn):
+    user_id = session.get("user_id")
+    if not user_id:
+        return None
+    row = conn.execute(
+        "SELECT id,username,display_name,role,active,created_at FROM users WHERE id=?",
+        (user_id,),
+    ).fetchone()
+    if not row or not row["active"]:
+        session.pop("user_id", None)
+        return None
+    return row_dict(row)
+
+
+@app.get("/api/users")
+def users_list():
+    conn = db()
+    users = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT id,username,display_name,role,active,created_at FROM users ORDER BY username"
+        ).fetchall()
+    ]
+    active_user = current_user(conn)
+    conn.close()
+    return jsonify(users=users, current_user=active_user, roles=sorted(USER_ROLES))
+
+
+@app.post("/api/users")
+def create_user():
+    payload = request.get_json(silent=True) or request.form
+    username = str(payload.get("username", "")).strip().lower()
+    display_name = str(payload.get("display_name", "")).strip()
+    role = str(payload.get("role", "")).strip().lower()
+    if not username or not display_name or role not in USER_ROLES:
+        return error_response(
+            "username, display_name and role (operator, technician or owner) are required",
+            400,
+            "INVALID_USER",
+        )
+    if len(username) > 80 or len(display_name) > 120:
+        return error_response("username or display_name is too long", 400, "INVALID_USER")
+    user_id = uuid.uuid4().hex[:12]
+    conn = db()
+    try:
+        conn.execute(
+            "INSERT INTO users(id,username,display_name,role,active,created_at) VALUES(?,?,?,?,?,?)",
+            (user_id, username, display_name, role, 1, now()),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return error_response("username already exists", 409, "USER_EXISTS")
+    user = row_dict(
+        conn.execute(
+            "SELECT id,username,display_name,role,active,created_at FROM users WHERE id=?",
+            (user_id,),
+        ).fetchone()
+    )
+    conn.close()
+    return jsonify(user=user), 201
+
+
+@app.get("/api/session")
+def get_session_user():
+    conn = db()
+    user = current_user(conn)
+    conn.close()
+    return jsonify(authenticated=bool(user), user=user)
+
+
+@app.post("/api/session")
+def select_session_user():
+    payload = request.get_json(silent=True) or request.form
+    user_id = str(payload.get("user_id", "")).strip()
+    conn = db()
+    user = row_dict(
+        conn.execute(
+            "SELECT id,username,display_name,role,active,created_at FROM users WHERE id=? AND active=1",
+            (user_id,),
+        ).fetchone()
+    )
+    conn.close()
+    if not user:
+        return error_response("active user not found", 404, "USER_NOT_FOUND")
+    session["user_id"] = user_id
+    return jsonify(authenticated=True, user=user)
+
+
+@app.delete("/api/session")
+def clear_session_user():
+    session.pop("user_id", None)
+    return jsonify(authenticated=False, user=None)
+
+
 JOB_FILTERS = {
     "all": None,
     "active": ("READY", "PRINTING", "RECOVERY_READY", "RECOVERING"),
@@ -382,12 +483,21 @@ def index():
                 values["date_to"],
             )
         ]
+        users = [
+            row_dict(row)
+            for row in conn.execute(
+                "SELECT id,username,display_name,role,active,created_at FROM users ORDER BY username"
+            ).fetchall()
+        ]
+        active_user = current_user(conn)
         conn.close()
     except ValueError as error:
         return error_response(str(error), 400, "INVALID_JOB_QUERY")
     return render_template(
         "index.html",
         jobs=jobs,
+        users=users,
+        active_user=active_user,
         checkpoint_interval_mm=CONFIG["checkpoint_interval_mm"],
         **values,
     )

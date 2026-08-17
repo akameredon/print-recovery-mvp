@@ -84,6 +84,20 @@ def migration_6_add_orientation(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE jobs ADD COLUMN orientation TEXT NOT NULL DEFAULT 'top-left'")
 
 
+def migration_7_add_local_users(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('operator', 'technician', 'owner')),
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+        """)
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -107,6 +121,7 @@ MIGRATIONS: list[Migration] = [
     (4, "add_checkpoint_band_pass", migration_4_add_checkpoint_band_pass),
     (5, "add_job_overlap", migration_5_add_job_overlap),
     (6, "add_orientation", migration_6_add_orientation),
+    (7, "add_local_users", migration_7_add_local_users),
 ]
 
 

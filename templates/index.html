@@ -30,6 +30,8 @@
     .readiness-panel.blocked { border-color:#b23a2f; background:#fff1ef; }
     .readiness-panel ul { margin:6px 0 0 18px; padding:0; }
     .readiness-state { font-weight:700; }
+    .account-panel { margin-top:14px; padding:12px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
+    .role-badge { display:inline-block; padding:3px 8px; border-radius:999px; background:#e5eef8; color:#145da0; font-weight:700; font-size:.8rem; }
     .continuation-preview { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
     .continuation-preview img { max-width:100%; height:auto; display:block; border:1px solid #c9d4df; }
     .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
@@ -48,6 +50,22 @@
   <main id="main-content" tabindex="-1">
   <h1>Print Recovery State Capture — MVP</h1>
   <p class="muted">Local prototype: preserve a job, record checkpoints, classify interruption and generate an assisted continuation image. It does not control printer hardware.</p>
+  <section class="account-panel" aria-labelledby="account-title">
+    <h2 id="account-title">Local user account</h2>
+    <p id="account-state" class="muted">{% if active_user %}Active: <strong>{{ active_user.display_name }}</strong> <span class="role-badge">{{ active_user.role }}</span>{% else %}No active account selected.{% endif %}</p>
+    <form onsubmit="createLocalUser(event)" class="grid">
+      <label>Username<input id="new-username" required maxlength="80" placeholder="e.g. macdonald"></label>
+      <label>Display name<input id="new-display-name" required maxlength="120" placeholder="Operator name"></label>
+      <label>Role<select id="new-role"><option value="operator">Operator</option><option value="technician">Technician</option><option value="owner">Owner</option></select></label>
+      <div><button type="submit">Create local account</button></div>
+    </form>
+    <label for="active-user">Select active account</label>
+    <select id="active-user" onchange="selectLocalUser(this.value)">
+      <option value="">Choose a local account</option>
+      {% for user in users %}<option value="{{ user.id }}" {% if active_user and active_user.id == user.id %}selected{% endif %}>{{ user.display_name }} — {{ user.role }}</option>{% endfor %}
+    </select>
+    <small class="muted">Day 61 scope: local account identity and roles. Password hashing and session expiry are scheduled for Day 62.</small>
+  </section>
 
   <section id="workflow-guide" class="card" aria-labelledby="workflow-title">
     <h2 id="workflow-title">Operator paper workflow</h2>
@@ -176,6 +194,19 @@
     {% endfor %}
   </section>
 <script>
+async function createLocalUser(event) {
+  event.preventDefault();
+  const payload = {username: document.getElementById('new-username').value, display_name: document.getElementById('new-display-name').value, role: document.getElementById('new-role').value};
+  const r = await fetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const body = await r.json();
+  if (r.ok) location.reload(); else document.getElementById('account-state').textContent = body.message || 'Unable to create account.';
+}
+async function selectLocalUser(id) {
+  if (!id) return;
+  const r = await fetch('/api/session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:id})});
+  const body = await r.json();
+  if (r.ok) location.reload(); else document.getElementById('account-state').textContent = body.message || 'Unable to select account.';
+}
 async function reviewRegistrationStrip(id, result) {
   const note = window.prompt('Optional registration-strip review note:') || '';
   const r = await fetch('/api/jobs/'+id+'/registration-strip/review', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({result, note})});
