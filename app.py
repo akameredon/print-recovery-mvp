@@ -333,6 +333,19 @@ def current_user(conn):
     return row_dict(row)
 
 
+def require_roles(conn, allowed_roles):
+    user = current_user(conn)
+    if not user:
+        return None, error_response("Authentication is required", 401, "AUTHENTICATION_REQUIRED")
+    if user["role"] not in allowed_roles:
+        return None, error_response(
+            "This action requires technician or owner permissions",
+            403,
+            "ROLE_FORBIDDEN",
+        )
+    return user, None
+
+
 @app.get("/api/users")
 def users_list():
     conn = db()
@@ -511,13 +524,18 @@ def printer_profiles_list():
 
 @app.post("/api/printer-profiles")
 def create_printer_profile():
+    conn = db()
+    _, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
     payload = request.get_json(silent=True) or request.form
     values, error = profile_payload(payload)
     if error:
+        conn.close()
         return error
     profile_id = uuid.uuid4().hex[:12]
     timestamp = now()
-    conn = db()
     try:
         conn.execute(
             """INSERT INTO printer_profiles(
@@ -572,11 +590,16 @@ def printer_profile_detail(profile_id):
 
 @app.patch("/api/printer-profiles/<profile_id>")
 def update_printer_profile(profile_id):
+    conn = db()
+    _, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
     payload = request.get_json(silent=True) or request.form
     values, error = profile_payload(payload)
     if error:
+        conn.close()
         return error
-    conn = db()
     if not conn.execute(
         "SELECT 1 FROM printer_profiles WHERE id=? AND active=1", (profile_id,)
     ).fetchone():
@@ -619,6 +642,10 @@ def update_printer_profile(profile_id):
 @app.delete("/api/printer-profiles/<profile_id>")
 def retire_printer_profile(profile_id):
     conn = db()
+    _, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
     updated = conn.execute(
         "UPDATE printer_profiles SET active=0,status='retired',updated_at=? WHERE id=? AND active=1",
         (now(), profile_id),
