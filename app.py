@@ -1296,6 +1296,91 @@ def weekly_material_waste_report():
     )
 
 
+@app.get("/api/reports/recovery-success-rate")
+def recovery_success_rate_report():
+    conn = db()
+    owner, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    raw_start = request.args.get("week_start", "").strip()
+    if raw_start:
+        try:
+            week_start = datetime.strptime(raw_start, "%Y-%m-%d").date()
+        except ValueError:
+            conn.close()
+            return error_response(
+                "week_start must use YYYY-MM-DD", 400, "INVALID_SUCCESS_RATE_QUERY"
+            )
+    else:
+        today = datetime.now(timezone.utc).date()
+        week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    decisions = conn.execute(
+        """SELECT d.*,j.file_name,j.printer_model,j.rip_name
+           FROM decisions d JOIN jobs j ON j.id=d.job_id
+           WHERE j.workspace_id=? AND date(d.created_at) BETWEEN date(?) AND date(?)
+           ORDER BY d.created_at,d.id""",
+        (owner["workspace_id"], week_start.isoformat(), week_end.isoformat()),
+    ).fetchall()
+    categories = {
+        "approved": 0,
+        "rejected": 0,
+        "restart": 0,
+        "pending": 0,
+        "test_first": 0,
+        "other": 0,
+    }
+    details = []
+    for decision in decisions:
+        action = (decision["operator_action"] or "").lower()
+        if action.startswith("approved"):
+            category = "approved"
+        elif action.startswith("rejected"):
+            category = "rejected"
+        elif "restart" in action:
+            category = "restart"
+        elif "test_first" in (decision["recommendation"] or "").lower():
+            category = "test_first"
+        elif "generated_continuation" in action:
+            category = "pending"
+        else:
+            category = "other"
+        categories[category] += 1
+        details.append(
+            {
+                "decision_id": decision["id"],
+                "job_id": decision["job_id"],
+                "file_name": decision["file_name"],
+                "timestamp": decision["created_at"],
+                "printer_model": decision["printer_model"],
+                "rip_name": decision["rip_name"],
+                "category": category,
+                "recommendation": decision["recommendation"],
+                "confidence": decision["confidence"],
+            }
+        )
+    reviewed = categories["approved"] + categories["rejected"]
+    success_rate = round(categories["approved"] / reviewed * 100, 2) if reviewed else None
+    conn.close()
+    return jsonify(
+        week_start=week_start.isoformat(),
+        week_end=week_end.isoformat(),
+        workspace_id=owner["workspace_id"],
+        categories=categories,
+        metrics={
+            "total_decisions": len(decisions),
+            "reviewed_decisions": reviewed,
+            "successful_approved": categories["approved"],
+            "failed_rejected": categories["rejected"],
+            "success_rate_percent": success_rate,
+        },
+        decisions=details,
+        success_rate_definition="Approved decisions divided by approved plus rejected decisions; pending, restart and test-first categories are shown separately.",
+        measurement_boundary="Software-recorded decision outcomes; approval does not prove physical print quality or successful material recovery.",
+    )
+
+
 @app.get("/api/outcomes")
 def owner_outcomes():
     conn = db()

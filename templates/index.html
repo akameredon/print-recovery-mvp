@@ -41,6 +41,7 @@
     .outcomes-panel { margin-top:14px; padding:12px; border:1px solid #c9b77d; border-radius:7px; background:#fffaf0; }
     .report-panel { margin-top:14px; padding:12px; border:1px solid #b8cfe0; border-radius:7px; background:#f3f9fd; }
     .waste-panel { margin-top:14px; padding:12px; border:1px solid #cdb8d8; border-radius:7px; background:#fbf5fd; }
+    .success-panel { margin-top:14px; padding:12px; border:1px solid #b9d0b8; border-radius:7px; background:#f5fbf4; }
     .metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:10px; }
     .metric { padding:10px; border:1px solid #e4d9b8; border-radius:6px; background:#fff; }
     .metric strong { display:block; font-size:1.2rem; }
@@ -127,6 +128,17 @@
     <div id="outcomes-metrics" class="metric-grid" aria-live="polite"><div class="metric">Load the owner summary.</div></div>
     <p id="outcomes-boundary" class="muted">The estimates are calculated from stored dimensions and recovery decisions; they are not physical material measurements.</p>
     {% else %}<p>Owner permission is required to view workspace waste and recovery outcomes.</p>{% endif %}
+  </section>
+
+  <section class="success-panel" aria-labelledby="success-rate-title">
+    <h2 id="success-rate-title">Recovery success-rate report</h2>
+    {% if active_user and active_user.role == 'owner' %}
+    <p>Review approved, rejected, restart and pending recovery decisions for the active workspace.</p>
+    <div class="grid"><label>Week starting Monday<input id="success-rate-start" type="date"></label></div>
+    <button type="button" class="secondary" onclick="loadSuccessRate()">Load success report</button>
+    <div id="success-rate-output" aria-live="polite" class="profile-list"><p class="muted">Choose a Monday and load the report.</p></div>
+    <p id="success-rate-boundary" class="muted">The report is based on software-recorded decisions and does not prove physical print success.</p>
+    {% else %}<p>Owner permission is required to view recovery success-rate reports.</p>{% endif %}
   </section>
 
   <section class="waste-panel" aria-labelledby="weekly-waste-title">
@@ -289,6 +301,17 @@
     {% endfor %}
   </section>
 <script>
+async function loadSuccessRate() {
+  const start = document.getElementById('success-rate-start').value;
+  const r = await fetch('/api/reports/recovery-success-rate' + (start ? '?week_start='+encodeURIComponent(start) : ''));
+  const body = await r.json();
+  const output = document.getElementById('success-rate-output');
+  if (!r.ok) { output.textContent = body.message || 'Unable to load success report.'; return; }
+  const m = body.metrics;
+  const c = body.categories;
+  output.innerHTML = '<div class="profile-item"><strong>'+(m.success_rate_percent === null ? 'n/a' : m.success_rate_percent+'%')+' success rate</strong><span class="muted">'+body.week_start+' to '+body.week_end+' · '+m.reviewed_decisions+' reviewed decisions</span><br><span class="muted">Approved: '+c.approved+' · Rejected: '+c.rejected+' · Restarts: '+c.restart+' · Pending: '+c.pending+' · Test first: '+c.test_first+'</span></div>';
+  document.getElementById('success-rate-boundary').textContent = body.measurement_boundary + ' ' + body.success_rate_definition;
+}
 async function loadWeeklyWaste() {
   const start = document.getElementById('weekly-waste-start').value;
   const r = await fetch('/api/reports/weekly-material-waste' + (start ? '?week_start='+encodeURIComponent(start) : ''));
