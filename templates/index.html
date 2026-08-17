@@ -40,6 +40,7 @@
     .adapter-panel { margin-top:14px; padding:12px; border:1px solid #b9c9d8; border-radius:7px; background:#eef5fb; }
     .outcomes-panel { margin-top:14px; padding:12px; border:1px solid #c9b77d; border-radius:7px; background:#fffaf0; }
     .report-panel { margin-top:14px; padding:12px; border:1px solid #b8cfe0; border-radius:7px; background:#f3f9fd; }
+    .waste-panel { margin-top:14px; padding:12px; border:1px solid #cdb8d8; border-radius:7px; background:#fbf5fd; }
     .metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:10px; }
     .metric { padding:10px; border:1px solid #e4d9b8; border-radius:6px; background:#fff; }
     .metric strong { display:block; font-size:1.2rem; }
@@ -126,6 +127,17 @@
     <div id="outcomes-metrics" class="metric-grid" aria-live="polite"><div class="metric">Load the owner summary.</div></div>
     <p id="outcomes-boundary" class="muted">The estimates are calculated from stored dimensions and recovery decisions; they are not physical material measurements.</p>
     {% else %}<p>Owner permission is required to view workspace waste and recovery outcomes.</p>{% endif %}
+  </section>
+
+  <section class="waste-panel" aria-labelledby="weekly-waste-title">
+    <h2 id="weekly-waste-title">Weekly material-waste report</h2>
+    {% if active_user and active_user.role == 'owner' %}
+    <p>Review software-recorded weekly material-saving and restart estimates for the active workspace.</p>
+    <div class="grid"><label>Week starting Monday<input id="weekly-waste-start" type="date"></label></div>
+    <button type="button" class="secondary" onclick="loadWeeklyWaste()">Load weekly report</button>
+    <div id="weekly-waste-output" aria-live="polite" class="profile-list"><p class="muted">Choose a Monday and load the report.</p></div>
+    <p id="weekly-waste-boundary" class="muted">The estimates are not physical material measurements.</p>
+    {% else %}<p>Owner permission is required to view weekly material-waste reports.</p>{% endif %}
   </section>
 
   <section class="report-panel" aria-labelledby="daily-report-title">
@@ -277,6 +289,17 @@
     {% endfor %}
   </section>
 <script>
+async function loadWeeklyWaste() {
+  const start = document.getElementById('weekly-waste-start').value;
+  const r = await fetch('/api/reports/weekly-material-waste' + (start ? '?week_start='+encodeURIComponent(start) : ''));
+  const body = await r.json();
+  const output = document.getElementById('weekly-waste-output');
+  if (!r.ok) { output.textContent = body.message || 'Unable to load weekly report.'; return; }
+  const m = body.metrics;
+  const printerRows = Object.entries(body.by_printer_rip || {}).map(([key, value]) => '<div class="profile-item"><strong>'+key+'</strong> — saved '+value.saved_area_m2+' m²; waste '+value.waste_m2+' m²<br><span class="muted">'+value.decisions+' decisions · '+value.continuations+' continuations · '+value.restarts+' restarts</span></div>').join('');
+  output.innerHTML = '<div class="profile-item"><strong>'+body.week_start+' to '+body.week_end+'</strong><br><span class="muted">Saved: '+m.estimated_material_saved_m2+' m² · Waste: '+m.estimated_waste_m2+' m² · Jobs: '+m.jobs_created+' · Decisions: '+m.decisions+'</span></div>' + (printerRows || '<p class="muted">No recovery decisions in this week.</p>');
+  document.getElementById('weekly-waste-boundary').textContent = body.measurement_boundary;
+}
 async function loadDailyReport() {
   const date = document.getElementById('daily-report-date').value;
   const r = await fetch('/api/reports/daily-interruptions' + (date ? '?date='+encodeURIComponent(date) : ''));

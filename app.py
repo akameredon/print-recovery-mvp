@@ -8,7 +8,7 @@ import os
 import sqlite3
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import (
@@ -1196,6 +1196,103 @@ def daily_interruptions_report():
         },
         interruptions=interruptions,
         measurement_boundary="Software-observed interruption events; this report does not prove electrical cause or physical printer state.",
+    )
+
+
+@app.get("/api/reports/weekly-material-waste")
+def weekly_material_waste_report():
+    conn = db()
+    owner, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    raw_start = request.args.get("week_start", "").strip()
+    if raw_start:
+        try:
+            week_start = datetime.strptime(raw_start, "%Y-%m-%d").date()
+        except ValueError:
+            conn.close()
+            return error_response(
+                "week_start must use YYYY-MM-DD", 400, "INVALID_WEEKLY_REPORT_QUERY"
+            )
+    else:
+        today = datetime.now(timezone.utc).date()
+        week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    rows = conn.execute(
+        """SELECT d.*,j.file_name,j.printer_model,j.rip_name,j.media_width_mm,j.media_length_mm
+           FROM decisions d JOIN jobs j ON j.id=d.job_id
+           WHERE j.workspace_id=? AND date(d.created_at) BETWEEN date(?) AND date(?)
+           ORDER BY d.created_at,d.id""",
+        (owner["workspace_id"], week_start.isoformat(), week_end.isoformat()),
+    ).fetchall()
+    job_rows = conn.execute(
+        "SELECT id FROM jobs WHERE workspace_id=? AND date(created_at) BETWEEN date(?) AND date(?)",
+        (owner["workspace_id"], week_start.isoformat(), week_end.isoformat()),
+    ).fetchall()
+    saved_area_mm2 = 0.0
+    waste_area_mm2 = 0.0
+    by_printer = {}
+    outcomes = {}
+    continuation_count = 0
+    restart_count = 0
+    for row in rows:
+        action = (row["operator_action"] or "").lower()
+        width = float(row["media_width_mm"] or 0)
+        length = float(row["media_length_mm"] or 0)
+        area = width * length
+        if "generated_continuation" in action:
+            continuation_count += 1
+            saved_area_mm2 += width * max(float(row["selected_y_mm"] or 0), 0)
+            outcome = "continuation"
+        elif "restart" in action:
+            restart_count += 1
+            waste_area_mm2 += area
+            outcome = "restart"
+        else:
+            outcome = "other"
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        key = f"{row['printer_model']} / {row['rip_name']}"
+        bucket = by_printer.setdefault(
+            key,
+            {
+                "decisions": 0,
+                "continuations": 0,
+                "restarts": 0,
+                "saved_area_mm2": 0.0,
+                "waste_area_mm2": 0.0,
+            },
+        )
+        bucket["decisions"] += 1
+        if outcome == "continuation":
+            bucket["continuations"] += 1
+            bucket["saved_area_mm2"] += width * max(float(row["selected_y_mm"] or 0), 0)
+        elif outcome == "restart":
+            bucket["restarts"] += 1
+            bucket["waste_area_mm2"] += area
+    conn.close()
+    for bucket in by_printer.values():
+        bucket["saved_area_m2"] = round(bucket["saved_area_mm2"] / 1_000_000, 4)
+        bucket["waste_m2"] = round(bucket["waste_area_mm2"] / 1_000_000, 4)
+        bucket["saved_area_mm2"] = round(bucket["saved_area_mm2"], 2)
+        bucket["waste_area_mm2"] = round(bucket["waste_area_mm2"], 2)
+    return jsonify(
+        week_start=week_start.isoformat(),
+        week_end=week_end.isoformat(),
+        workspace_id=owner["workspace_id"],
+        metrics={
+            "jobs_created": len(job_rows),
+            "decisions": len(rows),
+            "continuations": continuation_count,
+            "restarts": restart_count,
+            "outcomes": outcomes,
+            "estimated_material_saved_area_mm2": round(saved_area_mm2, 2),
+            "estimated_waste_area_mm2": round(waste_area_mm2, 2),
+            "estimated_material_saved_m2": round(saved_area_mm2 / 1_000_000, 4),
+            "estimated_waste_m2": round(waste_area_mm2 / 1_000_000, 4),
+        },
+        by_printer_rip=by_printer,
+        measurement_boundary="Software-recorded estimates from declared dimensions and decisions; not a physical material measurement.",
     )
 
 
