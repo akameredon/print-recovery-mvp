@@ -411,7 +411,9 @@ def audit_log_list():
     query_text = request.args.get("q", "").strip()
     date_from = request.args.get("date_from", "").strip()
     date_to = request.args.get("date_to", "").strip()
-    clauses, params = [], []
+    clauses, params = ["actor_user_id IN (SELECT id FROM users WHERE workspace_id=?)"], [
+        actor["workspace_id"]
+    ]
     for value, expression in (
         (action, "action=?"),
         (resource_type, "resource_type=?"),
@@ -453,8 +455,13 @@ def audit_log_list():
 @app.get("/api/workspaces")
 def workspaces_list():
     conn = db()
+    actor = current_user(conn)
+    if not actor:
+        conn.close()
+        return error_response("Authentication is required", 401, "AUTHENTICATION_REQUIRED")
     rows = conn.execute(
-        "SELECT id,name,active,created_at FROM workspaces WHERE active=1 ORDER BY name"
+        "SELECT id,name,active,created_at FROM workspaces WHERE id=? AND active=1",
+        (actor["workspace_id"],),
     ).fetchall()
     conn.close()
     return jsonify(workspaces=[row_dict(row) for row in rows])
@@ -497,15 +504,19 @@ def create_workspace():
 @app.get("/api/users")
 def users_list():
     conn = db()
+    actor = current_user(conn)
+    if not actor:
+        conn.close()
+        return error_response("Authentication is required", 401, "AUTHENTICATION_REQUIRED")
     users = [
         row_dict(row)
         for row in conn.execute(
-            "SELECT id,username,display_name,role,active,created_at,workspace_id FROM users ORDER BY username"
+            "SELECT id,username,display_name,role,active,created_at,workspace_id FROM users WHERE workspace_id=? ORDER BY username",
+            (actor["workspace_id"],),
         ).fetchall()
     ]
-    active_user = current_user(conn)
     conn.close()
-    return jsonify(users=users, current_user=active_user, roles=sorted(USER_ROLES))
+    return jsonify(users=users, current_user=actor, roles=sorted(USER_ROLES))
 
 
 @app.post("/api/users")
@@ -528,6 +539,23 @@ def create_user():
         return error_response("password must be at least 8 characters", 400, "WEAK_PASSWORD")
     user_id = uuid.uuid4().hex[:12]
     conn = db()
+    actor = current_user(conn)
+    if actor and actor["role"] != "owner" and workspace_id != actor["workspace_id"]:
+        conn.close()
+        return error_response(
+            "Only owners may assign accounts to another workspace", 403, "ROLE_FORBIDDEN"
+        )
+    if actor and actor["role"] != "owner":
+        workspace_id = actor["workspace_id"]
+    elif actor:
+        workspace_id = workspace_id or actor["workspace_id"]
+    elif workspace_id != "ws-default":
+        conn.close()
+        return error_response(
+            "Authentication is required for non-default workspace accounts",
+            401,
+            "AUTHENTICATION_REQUIRED",
+        )
     if not conn.execute(
         "SELECT 1 FROM workspaces WHERE id=? AND active=1", (workspace_id,)
     ).fetchone():
@@ -1189,7 +1217,11 @@ def owner_outcomes():
 
 
 def expected_job_revision(payload):
-    raw = payload.get("expected_revision") if "expected_revision" in payload else request.headers.get("If-Match")
+    raw = (
+        payload.get("expected_revision")
+        if "expected_revision" in payload
+        else request.headers.get("If-Match")
+    )
     if raw in (None, "", "*"):
         return None, None
     try:
@@ -1303,7 +1335,8 @@ def index():
         users = [
             row_dict(row)
             for row in conn.execute(
-                "SELECT id,username,display_name,role,active,created_at FROM users ORDER BY username"
+                "SELECT id,username,display_name,role,active,created_at FROM users WHERE workspace_id=? ORDER BY username",
+                (current_workspace_id(conn),),
             ).fetchall()
         ]
         active_user = current_user(conn)

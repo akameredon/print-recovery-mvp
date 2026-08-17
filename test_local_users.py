@@ -21,6 +21,13 @@ for role in ("operator", "technician", "owner"):
     assert body["user"]["role"] == role
     assert body["user"]["active"] == 1
 
+assert (
+    client.post(
+        BASE + "/api/session",
+        json={"username": f"{PREFIX}_owner", "password": "day61-password-123"},
+    ).status_code
+    == 200
+)
 users = client.get(BASE + "/api/users")
 assert users.status_code == 200
 assert {user["role"] for user in users.json()["users"]} >= {"operator", "technician", "owner"}
@@ -36,6 +43,14 @@ current = client.get(BASE + "/api/session")
 assert current.status_code == 200
 assert current.json()["authenticated"] is True
 assert current.json()["user"]["id"] == operator["id"]
+
+assert (
+    client.post(
+        BASE + "/api/session",
+        json={"username": operator["username"], "password": "day61-password-123"},
+    ).status_code
+    == 200
+)
 
 duplicate = client.post(
     BASE + "/api/users",
