@@ -29,6 +29,7 @@ from adapters import SimulatedAdapter
 from checkpoint_confidence import calculate_checkpoint_confidence
 from config import load_config, resolve_path
 from coordinate_conversion import media_mm_to_pixel
+from evidence_bundle import build_evidence_bundle, render_handoff_markdown
 from interruption_classification import classify_interruption
 from job_manifest import build_job_manifest
 from lifecycle_observer import observe_lifecycle
@@ -616,6 +617,57 @@ def job_manifest(job_id):
         ]
         return Response("\n".join(lines), mimetype="text/markdown")
     return jsonify(manifest)
+
+
+@app.get("/api/jobs/<job_id>/evidence-bundle")
+def evidence_handoff_bundle(job_id):
+    output_format = request.args.get("format", "json").lower()
+    if output_format not in {"json", "md", "markdown"}:
+        return error_response("format must be json or md", 400, "INVALID_BUNDLE_FORMAT")
+    conn = db()
+    job_row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job_row:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    job = row_dict(job_row)
+    checkpoints = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT * FROM checkpoints WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchall()
+    ]
+    events = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT * FROM events WHERE job_id=? ORDER BY id", (job_id,)
+        ).fetchall()
+    ]
+    conn.close()
+    source_path = Path(job["source_path"])
+    source_exists = source_path.exists()
+    actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_exists else None
+    manifest = build_job_manifest(
+        job, source_exists=source_exists, actual_hash=actual_hash, captured_at=now()
+    )
+    latest_checkpoint = checkpoints[-1] if checkpoints else {}
+    report = {
+        "generated_at": now(),
+        "source_integrity": {"status": manifest["job"]["source_integrity"]},
+        "selected_coordinate": {"y_mm": latest_checkpoint.get("y_mm")} if latest_checkpoint else {},
+        "checkpoint_count": len(checkpoints),
+        "event_count": len(events),
+        "readiness": "review_required",
+    }
+    bundle = build_evidence_bundle(
+        job=job,
+        manifest=manifest,
+        recovery_report=report,
+        checkpoints=checkpoints,
+        events=events,
+    )
+    if output_format in {"md", "markdown"}:
+        return Response(render_handoff_markdown(bundle), mimetype="text/markdown")
+    return jsonify(bundle)
 
 
 @app.get("/api/jobs/<job_id>/integrity")
