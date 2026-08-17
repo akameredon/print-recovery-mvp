@@ -25,6 +25,7 @@ from flask import (
 )
 from PIL import Image, ImageDraw
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from adapters import SimulatedAdapter
 from checkpoint_confidence import calculate_checkpoint_confidence
@@ -58,6 +59,7 @@ logger = configure_logging(str(LOG_PATH), CONFIG["log_level"])
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = CONFIG["max_upload_mb"] * 1024 * 1024
 app.secret_key = os.environ.get("PRINT_RECOVERY_SESSION_SECRET", "day61-local-session-key")
+SESSION_TTL_SECONDS = int(os.environ.get("PRINT_RECOVERY_SESSION_TTL_SECONDS", "3600"))
 
 
 @app.before_request
@@ -302,8 +304,23 @@ INTERRUPTION_REASONS = {
 USER_ROLES = {"operator", "technician", "owner"}
 
 
+def session_is_expired(issued_at: str | None, now_epoch: float | None = None) -> bool:
+    if not issued_at:
+        return True
+    try:
+        issued_epoch = float(issued_at)
+    except (TypeError, ValueError):
+        return True
+    return (
+        now_epoch if now_epoch is not None else time.time()
+    ) - issued_epoch >= SESSION_TTL_SECONDS
+
+
 def current_user(conn):
     user_id = session.get("user_id")
+    if not user_id or session_is_expired(session.get("issued_at")):
+        session.clear()
+        return None
     if not user_id:
         return None
     row = conn.execute(
@@ -336,20 +353,23 @@ def create_user():
     username = str(payload.get("username", "")).strip().lower()
     display_name = str(payload.get("display_name", "")).strip()
     role = str(payload.get("role", "")).strip().lower()
-    if not username or not display_name or role not in USER_ROLES:
+    password = str(payload.get("password", ""))
+    if not username or not display_name or role not in USER_ROLES or not password:
         return error_response(
-            "username, display_name and role (operator, technician or owner) are required",
+            "username, display_name, role and password are required",
             400,
             "INVALID_USER",
         )
     if len(username) > 80 or len(display_name) > 120:
         return error_response("username or display_name is too long", 400, "INVALID_USER")
+    if len(password) < 8:
+        return error_response("password must be at least 8 characters", 400, "WEAK_PASSWORD")
     user_id = uuid.uuid4().hex[:12]
     conn = db()
     try:
         conn.execute(
-            "INSERT INTO users(id,username,display_name,role,active,created_at) VALUES(?,?,?,?,?,?)",
-            (user_id, username, display_name, role, 1, now()),
+            "INSERT INTO users(id,username,display_name,role,active,created_at,password_hash) VALUES(?,?,?,?,?,?,?)",
+            (user_id, username, display_name, role, 1, now(), generate_password_hash(password)),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -377,25 +397,237 @@ def get_session_user():
 @app.post("/api/session")
 def select_session_user():
     payload = request.get_json(silent=True) or request.form
-    user_id = str(payload.get("user_id", "")).strip()
+    username = str(payload.get("username", "")).strip().lower()
+    password = str(payload.get("password", ""))
     conn = db()
-    user = row_dict(
-        conn.execute(
-            "SELECT id,username,display_name,role,active,created_at FROM users WHERE id=? AND active=1",
-            (user_id,),
-        ).fetchone()
-    )
+    row = conn.execute(
+        "SELECT id,username,display_name,role,active,created_at,password_hash FROM users WHERE username=? AND active=1",
+        (username,),
+    ).fetchone()
+    if (
+        not row
+        or not row["password_hash"]
+        or not check_password_hash(row["password_hash"], password)
+    ):
+        conn.close()
+        return error_response("invalid username or password", 401, "INVALID_CREDENTIALS")
+    login_time = now()
+    conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (login_time, row["id"]))
+    conn.commit()
+    user = {
+        key: row[key] for key in ("id", "username", "display_name", "role", "active", "created_at")
+    }
     conn.close()
-    if not user:
-        return error_response("active user not found", 404, "USER_NOT_FOUND")
-    session["user_id"] = user_id
-    return jsonify(authenticated=True, user=user)
+    session.clear()
+    session["user_id"] = user["id"]
+    session["issued_at"] = str(time.time())
+    session["last_login_at"] = login_time
+    return jsonify(authenticated=True, user=user, expires_in_seconds=SESSION_TTL_SECONDS)
+
+
+@app.post("/api/login")
+def login():
+    return select_session_user()
 
 
 @app.delete("/api/session")
 def clear_session_user():
-    session.pop("user_id", None)
+    session.clear()
     return jsonify(authenticated=False, user=None)
+
+
+PROFILE_REQUIRED_FIELDS = (
+    "name",
+    "manufacturer",
+    "printer_model",
+    "rip_name",
+    "rip_version",
+    "connection_mode",
+    "job_input_path",
+    "job_output_or_hotfolder",
+)
+
+
+def profile_payload(payload):
+    values = {field: str(payload.get(field, "")).strip() for field in PROFILE_REQUIRED_FIELDS}
+    missing = [field for field, value in values.items() if not value]
+    if missing:
+        return None, error_response(
+            "Missing required profile fields: " + ", ".join(missing),
+            400,
+            "INVALID_PRINTER_PROFILE",
+        )
+    recovery_mode = str(payload.get("recovery_mode", "assisted_only")).strip().lower()
+    if recovery_mode != "assisted_only":
+        return None, error_response(
+            "Only assisted_only recovery mode is supported by this MVP",
+            400,
+            "UNSAFE_RECOVERY_MODE",
+        )
+    raw_signals = payload.get("observable_signals", [])
+    if isinstance(raw_signals, str):
+        try:
+            raw_signals = json.loads(raw_signals)
+        except json.JSONDecodeError:
+            raw_signals = [item.strip() for item in raw_signals.split(",") if item.strip()]
+    if not isinstance(raw_signals, list) or not all(isinstance(item, str) for item in raw_signals):
+        return None, error_response(
+            "observable_signals must be a list of strings", 400, "INVALID_PRINTER_PROFILE"
+        )
+    values.update(
+        recovery_mode=recovery_mode,
+        observable_signals=raw_signals,
+        physical_validation_required=bool(payload.get("physical_validation_required", True)),
+        status=str(payload.get("status", "draft")).strip().lower() or "draft",
+    )
+    if values["status"] not in {"draft", "ready", "retired"}:
+        return None, error_response(
+            "status must be draft, ready or retired", 400, "INVALID_PRINTER_PROFILE"
+        )
+    return values, None
+
+
+def public_profile(row):
+    profile = row_dict(row)
+    if profile:
+        profile["observable_signals"] = json.loads(profile["observable_signals"] or "[]")
+        profile["physical_validation_required"] = bool(profile["physical_validation_required"])
+        profile.pop("active", None)
+    return profile
+
+
+@app.get("/api/printer-profiles")
+def printer_profiles_list():
+    conn = db()
+    profiles = [
+        public_profile(row)
+        for row in conn.execute(
+            "SELECT * FROM printer_profiles WHERE active=1 ORDER BY name"
+        ).fetchall()
+    ]
+    conn.close()
+    return jsonify(profiles=profiles, count=len(profiles))
+
+
+@app.post("/api/printer-profiles")
+def create_printer_profile():
+    payload = request.get_json(silent=True) or request.form
+    values, error = profile_payload(payload)
+    if error:
+        return error
+    profile_id = uuid.uuid4().hex[:12]
+    timestamp = now()
+    conn = db()
+    try:
+        conn.execute(
+            """INSERT INTO printer_profiles(
+                id,name,manufacturer,printer_model,rip_name,rip_version,connection_mode,
+                job_input_path,job_output_or_hotfolder,recovery_mode,observable_signals,
+                physical_validation_required,status,active,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                profile_id,
+                values["name"],
+                values["manufacturer"],
+                values["printer_model"],
+                values["rip_name"],
+                values["rip_version"],
+                values["connection_mode"],
+                values["job_input_path"],
+                values["job_output_or_hotfolder"],
+                values["recovery_mode"],
+                json.dumps(values["observable_signals"], sort_keys=True),
+                int(values["physical_validation_required"]),
+                values["status"],
+                1,
+                timestamp,
+                timestamp,
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return error_response("profile name already exists", 409, "PROFILE_EXISTS")
+    profile = public_profile(
+        conn.execute("SELECT * FROM printer_profiles WHERE id=?", (profile_id,)).fetchone()
+    )
+    conn.close()
+    return jsonify(profile=profile), 201
+
+
+@app.get("/api/printer-profiles/<profile_id>")
+def printer_profile_detail(profile_id):
+    conn = db()
+    profile = public_profile(
+        conn.execute(
+            "SELECT * FROM printer_profiles WHERE id=? AND active=1", (profile_id,)
+        ).fetchone()
+    )
+    conn.close()
+    if not profile:
+        return error_response("Printer profile not found", 404, "PROFILE_NOT_FOUND")
+    return jsonify(profile=profile)
+
+
+@app.patch("/api/printer-profiles/<profile_id>")
+def update_printer_profile(profile_id):
+    payload = request.get_json(silent=True) or request.form
+    values, error = profile_payload(payload)
+    if error:
+        return error
+    conn = db()
+    if not conn.execute(
+        "SELECT 1 FROM printer_profiles WHERE id=? AND active=1", (profile_id,)
+    ).fetchone():
+        conn.close()
+        return error_response("Printer profile not found", 404, "PROFILE_NOT_FOUND")
+    try:
+        conn.execute(
+            """UPDATE printer_profiles SET name=?,manufacturer=?,printer_model=?,rip_name=?,rip_version=?,
+            connection_mode=?,job_input_path=?,job_output_or_hotfolder=?,recovery_mode=?,observable_signals=?,
+            physical_validation_required=?,status=?,updated_at=? WHERE id=?""",
+            (
+                values["name"],
+                values["manufacturer"],
+                values["printer_model"],
+                values["rip_name"],
+                values["rip_version"],
+                values["connection_mode"],
+                values["job_input_path"],
+                values["job_output_or_hotfolder"],
+                values["recovery_mode"],
+                json.dumps(values["observable_signals"], sort_keys=True),
+                int(values["physical_validation_required"]),
+                values["status"],
+                now(),
+                profile_id,
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return error_response("profile name already exists", 409, "PROFILE_EXISTS")
+    profile = public_profile(
+        conn.execute("SELECT * FROM printer_profiles WHERE id=?", (profile_id,)).fetchone()
+    )
+    conn.close()
+    return jsonify(profile=profile)
+
+
+@app.delete("/api/printer-profiles/<profile_id>")
+def retire_printer_profile(profile_id):
+    conn = db()
+    updated = conn.execute(
+        "UPDATE printer_profiles SET active=0,status='retired',updated_at=? WHERE id=? AND active=1",
+        (now(), profile_id),
+    ).rowcount
+    conn.commit()
+    conn.close()
+    if not updated:
+        return error_response("Printer profile not found", 404, "PROFILE_NOT_FOUND")
+    return jsonify(profile_id=profile_id, status="retired")
 
 
 JOB_FILTERS = {
@@ -490,6 +722,12 @@ def index():
             ).fetchall()
         ]
         active_user = current_user(conn)
+        profiles = [
+            public_profile(row)
+            for row in conn.execute(
+                "SELECT * FROM printer_profiles WHERE active=1 ORDER BY name"
+            ).fetchall()
+        ]
         conn.close()
     except ValueError as error:
         return error_response(str(error), 400, "INVALID_JOB_QUERY")
@@ -498,6 +736,7 @@ def index():
         jobs=jobs,
         users=users,
         active_user=active_user,
+        profiles=profiles,
         checkpoint_interval_mm=CONFIG["checkpoint_interval_mm"],
         **values,
     )

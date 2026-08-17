@@ -32,6 +32,9 @@
     .readiness-state { font-weight:700; }
     .account-panel { margin-top:14px; padding:12px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
     .role-badge { display:inline-block; padding:3px 8px; border-radius:999px; background:#e5eef8; color:#145da0; font-weight:700; font-size:.8rem; }
+    .profile-panel { margin-top:14px; padding:12px; border:1px solid #dce3ea; border-radius:7px; background:#fff; }
+    .profile-list { display:grid; gap:6px; margin-top:10px; }
+    .profile-item { padding:8px; border:1px solid #dce3ea; border-radius:6px; background:#f7fafc; }
     .continuation-preview { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
     .continuation-preview img { max-width:100%; height:auto; display:block; border:1px solid #c9d4df; }
     .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
@@ -57,14 +60,36 @@
       <label>Username<input id="new-username" required maxlength="80" placeholder="e.g. macdonald"></label>
       <label>Display name<input id="new-display-name" required maxlength="120" placeholder="Operator name"></label>
       <label>Role<select id="new-role"><option value="operator">Operator</option><option value="technician">Technician</option><option value="owner">Owner</option></select></label>
+      <label>Password<input id="new-password" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters"></label>
       <div><button type="submit">Create local account</button></div>
     </form>
-    <label for="active-user">Select active account</label>
-    <select id="active-user" onchange="selectLocalUser(this.value)">
-      <option value="">Choose a local account</option>
-      {% for user in users %}<option value="{{ user.id }}" {% if active_user and active_user.id == user.id %}selected{% endif %}>{{ user.display_name }} — {{ user.role }}</option>{% endfor %}
-    </select>
-    <small class="muted">Day 61 scope: local account identity and roles. Password hashing and session expiry are scheduled for Day 62.</small>
+    <form onsubmit="loginLocalUser(event)" class="grid">
+      <label>Username<select id="login-username" required><option value="">Choose a local account</option>{% for user in users %}<option value="{{ user.username }}">{{ user.display_name }} — {{ user.role }}</option>{% endfor %}</select></label>
+      <label>Password<input id="login-password" type="password" required autocomplete="current-password"></label>
+      <div><button type="submit">Sign in</button><button type="button" class="secondary" onclick="logoutLocalUser()">Sign out</button></div>
+    </form>
+    <small class="muted">Sessions expire after the configured inactivity window. Role-based override permissions are scheduled for Day 63.</small>
+  </section>
+
+  <section class="profile-panel" aria-labelledby="profiles-title">
+    <h2 id="profiles-title">Printer profiles</h2>
+    <p class="muted">Store validated printer/RIP settings for Mimaki, Roland and other shop configurations. Profiles are configuration records only; this MVP does not control hardware.</p>
+    <form onsubmit="createPrinterProfile(event)" class="grid">
+      <label>Name<input id="profile-name" required placeholder="Mimaki JV33 — RasterLink7"></label>
+      <label>Manufacturer<input id="profile-manufacturer" required placeholder="Mimaki"></label>
+      <label>Printer model<input id="profile-model" required placeholder="JV33-130"></label>
+      <label>RIP name<input id="profile-rip" required placeholder="RasterLink7"></label>
+      <label>RIP version<input id="profile-rip-version" required placeholder="7.x"></label>
+      <label>Connection mode<input id="profile-connection" required placeholder="hotfolder or observed_queue"></label>
+      <label>Job input path<input id="profile-input" required placeholder="/jobs/incoming"></label>
+      <label>Output/hot-folder<input id="profile-output" required placeholder="/jobs/hotfolder"></label>
+      <label>Observable signals<input id="profile-signals" placeholder="queue, progress, completion"></label>
+      <label>Status<select id="profile-status"><option value="draft">Draft</option><option value="ready">Ready</option></select></label>
+      <div><button type="submit">Save printer profile</button></div>
+    </form>
+    <div class="profile-list" aria-live="polite">
+      {% if profiles %}{% for profile in profiles %}<div class="profile-item"><strong>{{ profile.name }}</strong> — {{ profile.manufacturer }} {{ profile.printer_model }} / {{ profile.rip_name }} {{ profile.rip_version }}<br><span class="muted">{{ profile.status }} · assisted_only · signals: {{ profile.observable_signals|join(', ') if profile.observable_signals else 'none recorded' }}</span></div>{% endfor %}{% else %}<p class="muted">No printer profiles stored yet.</p>{% endif %}
+    </div>
   </section>
 
   <section id="workflow-guide" class="card" aria-labelledby="workflow-title">
@@ -194,18 +219,30 @@
     {% endfor %}
   </section>
 <script>
+async function createPrinterProfile(event) {
+  event.preventDefault();
+  const payload = {name: document.getElementById('profile-name').value, manufacturer: document.getElementById('profile-manufacturer').value, printer_model: document.getElementById('profile-model').value, rip_name: document.getElementById('profile-rip').value, rip_version: document.getElementById('profile-rip-version').value, connection_mode: document.getElementById('profile-connection').value, job_input_path: document.getElementById('profile-input').value, job_output_or_hotfolder: document.getElementById('profile-output').value, observable_signals: document.getElementById('profile-signals').value.split(',').map(item => item.trim()).filter(Boolean), recovery_mode: 'assisted_only', status: document.getElementById('profile-status').value};
+  const r = await fetch('/api/printer-profiles', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const body = await r.json();
+  if (r.ok) location.reload(); else document.getElementById('account-state').textContent = body.message || 'Unable to save printer profile.';
+}
 async function createLocalUser(event) {
   event.preventDefault();
-  const payload = {username: document.getElementById('new-username').value, display_name: document.getElementById('new-display-name').value, role: document.getElementById('new-role').value};
+  const payload = {username: document.getElementById('new-username').value, display_name: document.getElementById('new-display-name').value, role: document.getElementById('new-role').value, password: document.getElementById('new-password').value};
   const r = await fetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   const body = await r.json();
   if (r.ok) location.reload(); else document.getElementById('account-state').textContent = body.message || 'Unable to create account.';
 }
-async function selectLocalUser(id) {
-  if (!id) return;
-  const r = await fetch('/api/session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:id})});
+async function loginLocalUser(event) {
+  event.preventDefault();
+  const payload = {username: document.getElementById('login-username').value, password: document.getElementById('login-password').value};
+  const r = await fetch('/api/session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   const body = await r.json();
-  if (r.ok) location.reload(); else document.getElementById('account-state').textContent = body.message || 'Unable to select account.';
+  if (r.ok) location.reload(); else document.getElementById('account-state').textContent = body.message || 'Unable to sign in.';
+}
+async function logoutLocalUser() {
+  await fetch('/api/session', {method:'DELETE'});
+  location.reload();
 }
 async function reviewRegistrationStrip(id, result) {
   const note = window.prompt('Optional registration-strip review note:') || '';

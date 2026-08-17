@@ -98,6 +98,35 @@ def migration_7_add_local_users(conn: sqlite3.Connection) -> None:
         """)
 
 
+def migration_8_add_password_auth(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+
+
+def migration_9_add_printer_profiles(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS printer_profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            manufacturer TEXT NOT NULL,
+            printer_model TEXT NOT NULL,
+            rip_name TEXT NOT NULL,
+            rip_version TEXT NOT NULL,
+            connection_mode TEXT NOT NULL,
+            job_input_path TEXT NOT NULL,
+            job_output_or_hotfolder TEXT NOT NULL,
+            recovery_mode TEXT NOT NULL DEFAULT 'assisted_only',
+            observable_signals TEXT NOT NULL DEFAULT '[]',
+            physical_validation_required INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'draft',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_printer_profiles_active ON printer_profiles(active);
+        """)
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -122,6 +151,8 @@ MIGRATIONS: list[Migration] = [
     (5, "add_job_overlap", migration_5_add_job_overlap),
     (6, "add_orientation", migration_6_add_orientation),
     (7, "add_local_users", migration_7_add_local_users),
+    (8, "add_password_auth", migration_8_add_password_auth),
+    (9, "add_printer_profiles", migration_9_add_printer_profiles),
 ]
 
 
