@@ -40,7 +40,7 @@ from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
 from output_naming import continuation_output_name
 from readiness_summary import summarize_readiness
-from recovery_report import render_recovery_report
+from recovery_report import render_printable_recovery_report, render_recovery_report
 from recovery_safety import assess_recovery_safety
 from registration_strip import generate_registration_strip
 from signal_matrix import assess_signal_matrix
@@ -2021,8 +2021,8 @@ def readiness_summary(job_id):
 @app.get("/api/jobs/<job_id>/recovery-report")
 def recovery_report(job_id):
     output_format = request.args.get("format", "json").lower()
-    if output_format not in {"json", "md", "markdown"}:
-        return error_response("format must be json or md", 400, "INVALID_REPORT_FORMAT")
+    if output_format not in {"json", "md", "markdown", "print"}:
+        return error_response("format must be json, md or print", 400, "INVALID_REPORT_FORMAT")
     conn = db()
     job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not job:
@@ -2107,6 +2107,12 @@ def recovery_report(job_id):
     conn.close()
     if output_format in {"md", "markdown"}:
         return Response(render_recovery_report(report), mimetype="text/markdown")
+    if output_format == "print":
+        response = Response(render_printable_recovery_report(report), mimetype="text/html")
+        response.headers["Content-Disposition"] = (
+            f'inline; filename="{job_id}_recovery_report.html"'
+        )
+        return response
     return jsonify(report)
 
 
