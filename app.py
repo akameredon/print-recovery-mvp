@@ -89,12 +89,13 @@ def wants_json_error() -> bool:
     return request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json"
 
 
-def error_response(message: str, status_code: int, error_code: str):
+def error_response(message: str, status_code: int, error_code: str, **details):
     payload = {
         "error": error_code,
         "message": message,
         "status": status_code,
         "correlation_id": g.get("correlation_id", "-"),
+        **details,
     }
     if wants_json_error():
         return jsonify(payload), status_code
@@ -1187,6 +1188,29 @@ def owner_outcomes():
     )
 
 
+def expected_job_revision(payload):
+    raw = payload.get("expected_revision") if "expected_revision" in payload else request.headers.get("If-Match")
+    if raw in (None, "", "*"):
+        return None, None
+    try:
+        return int(str(raw).strip().strip('"')), None
+    except (TypeError, ValueError):
+        return None, error_response(
+            "expected_revision must be an integer", 400, "INVALID_JOB_REVISION"
+        )
+
+
+def job_revision_conflict(job):
+    return error_response(
+        "Job changed by another user; reload the job before retrying",
+        409,
+        "JOB_CONFLICT",
+        current_revision=job["revision"],
+        current_updated_at=job["updated_at"],
+        job_id=job["id"],
+    )
+
+
 JOB_FILTERS = {
     "all": None,
     "active": ("READY", "PRINTING", "RECOVERY_READY", "RECOVERING"),
@@ -2177,18 +2201,40 @@ def update_job_overlap(job_id):
             raise ValueError("overlap_mm must be non-negative")
     except (TypeError, ValueError) as error:
         return error_response(str(error), 400, "INVALID_OVERLAP")
+    expected_revision, revision_error = expected_job_revision(payload)
+    if revision_error:
+        return revision_error
     conn = db()
-    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    job = conn.execute("SELECT id,revision,updated_at FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not job:
         conn.close()
         return error_response("Job not found", 404, "JOB_NOT_FOUND")
-    conn.execute(
-        "UPDATE jobs SET overlap_mm=?,updated_at=? WHERE id=?", (overlap_mm, now(), job_id)
-    )
+    if expected_revision is not None and expected_revision != job["revision"]:
+        conn.close()
+        return job_revision_conflict(job)
+    if expected_revision is None:
+        updated = conn.execute(
+            "UPDATE jobs SET overlap_mm=?,updated_at=?,revision=revision+1 WHERE id=?",
+            (overlap_mm, now(), job_id),
+        ).rowcount
+    else:
+        updated = conn.execute(
+            "UPDATE jobs SET overlap_mm=?,updated_at=?,revision=revision+1 WHERE id=? AND revision=?",
+            (overlap_mm, now(), job_id, expected_revision),
+        ).rowcount
+    if not updated:
+        current = conn.execute(
+            "SELECT id,revision,updated_at FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        conn.close()
+        return job_revision_conflict(current)
     record_event(conn, job_id, "JOB_OVERLAP_UPDATED", "operator", {"overlap_mm": overlap_mm})
     conn.commit()
+    new_revision = conn.execute("SELECT revision FROM jobs WHERE id=?", (job_id,)).fetchone()[
+        "revision"
+    ]
     conn.close()
-    return jsonify(ok=True, job_id=job_id, overlap_mm=overlap_mm)
+    return jsonify(ok=True, job_id=job_id, overlap_mm=overlap_mm, revision=new_revision)
 
 
 @app.get("/api/jobs/<job_id>/continuation-preview")

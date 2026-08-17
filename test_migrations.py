@@ -6,12 +6,12 @@ from migrations import applied_versions, run_migrations
 with tempfile.NamedTemporaryFile(suffix=".sqlite3") as handle:
     conn = sqlite3.connect(handle.name)
     first = run_migrations(conn)
-    assert [version for version, _ in first] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    assert applied_versions(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert [version for version, _ in first] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    assert applied_versions(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 
     second = run_migrations(conn)
     assert second == []
-    assert applied_versions(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert applied_versions(conn) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
         "schema_migrations",
@@ -41,12 +41,13 @@ with tempfile.NamedTemporaryFile(suffix=".sqlite3") as handle:
     assert "workspace_id" in {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     adapter_columns = {row[1] for row in conn.execute("PRAGMA table_info(adapter_configurations)")}
     assert {"workspace_id", "adapter_type", "settings", "status"}.issubset(adapter_columns)
+    assert "revision" in {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
 
     conn.close()
 print(
     {
         "status": "passed",
-        "versions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "versions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
         "second_run": "idempotent",
     }
 )

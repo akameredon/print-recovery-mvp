@@ -82,7 +82,7 @@ Stop the application with `Ctrl+C` in the terminal. The local SQLite database is
 
 ## Clean-machine verification
 
-To verify a clean installation, use a new directory or machine, clone the repository again, create a new virtual environment, install `requirements-dev.txt`, run the full test commands, start the application and confirm that `/healthz` returns HTTP 200 with schema versions `[1, 2, 3, 4, 5, 6, 7, 8, 9]`. Do not copy an existing `data/` directory into the test because that would hide migration and first-start problems.
+To verify a clean installation, use a new directory or machine, clone the repository again, create a new virtual environment, install `requirements-dev.txt`, run the full test commands, start the application and confirm that `/healthz` returns HTTP 200 with schema versions `[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]`. Do not copy an existing `data/` directory into the test because that would hide migration and first-start problems.
 
 ## Troubleshooting
 

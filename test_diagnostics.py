@@ -18,6 +18,7 @@ assert health_body["checks"]["database"]["schema_versions"] == [
     10,
     11,
     12,
+    13,
 ]
 assert health_body["checks"]["paths"]["status"] == "ok"
 assert "request_correlation_id" not in health_body

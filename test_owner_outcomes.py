@@ -9,10 +9,20 @@ password = "day68-owner-password"
 
 owner = client.post(
     BASE + "/api/users",
-    json={"username": prefix + "_owner", "display_name": "Day 68 Owner", "role": "owner", "password": password},
+    json={
+        "username": prefix + "_owner",
+        "display_name": "Day 68 Owner",
+        "role": "owner",
+        "password": password,
+    },
 )
 assert owner.status_code == 201, owner.text
-assert client.post(BASE + "/api/session", json={"username": prefix + "_owner", "password": password}).status_code == 200
+assert (
+    client.post(
+        BASE + "/api/session", json={"username": prefix + "_owner", "password": password}
+    ).status_code
+    == 200
+)
 
 metrics = client.get(BASE + "/api/outcomes")
 assert metrics.status_code == 200, metrics.text
@@ -28,10 +38,20 @@ assert invalid.json()["error"] == "INVALID_OUTCOME_QUERY"
 
 operator = client.post(
     BASE + "/api/users",
-    json={"username": prefix + "_operator", "display_name": "Day 68 Operator", "role": "operator", "password": password},
+    json={
+        "username": prefix + "_operator",
+        "display_name": "Day 68 Operator",
+        "role": "operator",
+        "password": password,
+    },
 )
 assert operator.status_code == 201
-assert client.post(BASE + "/api/session", json={"username": prefix + "_operator", "password": password}).status_code == 200
+assert (
+    client.post(
+        BASE + "/api/session", json={"username": prefix + "_operator", "password": password}
+    ).status_code
+    == 200
+)
 forbidden = client.get(BASE + "/api/outcomes")
 assert forbidden.status_code == 403
 assert forbidden.json()["error"] == "ROLE_FORBIDDEN"

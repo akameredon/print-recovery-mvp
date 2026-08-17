@@ -189,6 +189,11 @@ def migration_12_add_adapter_configurations(conn: sqlite3.Connection) -> None:
         """)
 
 
+def migration_13_add_job_revision(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE jobs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_revision ON jobs(id, revision)")
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -218,6 +223,7 @@ MIGRATIONS: list[Migration] = [
     (10, "add_audit_log", migration_10_add_audit_log),
     (11, "add_workspaces", migration_11_add_workspaces),
     (12, "add_adapter_configurations", migration_12_add_adapter_configurations),
+    (13, "add_job_revision", migration_13_add_job_revision),
 ]
 
 
