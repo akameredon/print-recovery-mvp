@@ -37,6 +37,7 @@ from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
 from orientation_validation import validate_orientation_origin
 from output_naming import continuation_output_name
+from readiness_summary import summarize_readiness
 from recovery_report import render_recovery_report
 from recovery_safety import assess_recovery_safety
 from registration_strip import generate_registration_strip
@@ -773,6 +774,16 @@ def recovery_readiness(job_id):
     }
     conn.close()
     return jsonify(response)
+
+
+@app.get("/api/jobs/<job_id>/readiness-summary")
+def readiness_summary(job_id):
+    detailed_response = recovery_readiness(job_id)
+    if isinstance(detailed_response, tuple):
+        detailed_response = detailed_response[0]
+    if detailed_response.status_code != 200:
+        return detailed_response
+    return jsonify(summarize_readiness(detailed_response.get_json()))
 
 
 @app.get("/api/jobs/<job_id>/recovery-report")

@@ -26,6 +26,10 @@
     .confidence-badge { border:1px solid #c9d4df; border-radius:999px; padding:4px 8px; font-size:.78rem; background:#eef2f6; color:#617080; }
     .confidence-badge.seen { background:#dff3e8; border-color:#74b88e; color:#185c36; font-weight:700; }
     .review-panel { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#fffaf0; }
+    .readiness-panel { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f0f7ff; }
+    .readiness-panel.blocked { border-color:#b23a2f; background:#fff1ef; }
+    .readiness-panel ul { margin:6px 0 0 18px; padding:0; }
+    .readiness-state { font-weight:700; }
     .continuation-preview { margin-top:10px; padding:10px; border:1px solid #dce3ea; border-radius:7px; background:#f7fafc; }
     .continuation-preview img { max-width:100%; height:auto; display:block; border:1px solid #c9d4df; }
     .action-cards { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; }
@@ -130,6 +134,7 @@
         </div>
         <div>
           <button class="secondary" onclick="recommend('{{job.id}}')">Show recovery recommendation</button>
+          <button class="secondary" onclick="loadReadiness('{{job.id}}')">Show readiness summary</button>
           <button class="secondary" onclick="validateOrientation('{{job.id}}')">Validate image orientation and origin</button>
           <button class="secondary" onclick="registrationStrip('{{job.id}}')">Generate registration strip</button>
           <button class="secondary" onclick="reviewRegistrationStrip('{{job.id}}','aligned')">Confirm strip aligned</button>
@@ -148,6 +153,7 @@
           </div>
           <button class="secondary" onclick="preview('{{job.id}}')">Preview recovery regions</button>
           <button onclick="generate('{{job.id}}')">Generate continuation from selected y</button>
+          <div id="readiness-{{job.id}}" class="readiness-panel" hidden aria-live="polite"></div>
           <div id="actions-{{job.id}}" class="action-cards" aria-label="Recovery actions">
             <div class="action-card" data-action="CONTINUE">Continue<small>Use the proposed continuation after approval.</small></div>
             <div class="action-card" data-action="TEST_FIRST">Test first<small>Print a registration test before continuation.</small></div>
@@ -201,6 +207,19 @@ async function interrupt(id) {
   const r = await fetch('/api/jobs/'+id+'/interrupt', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason,source:'operator',note})});
   document.getElementById('out-'+id).textContent = JSON.stringify(await r.json(), null, 2);
   setTimeout(()=>location.reload(), 300);
+}
+async function loadReadiness(id) {
+  const r = await fetch('/api/jobs/'+id+'/readiness-summary');
+  const body = await r.json();
+  const panel = document.getElementById('readiness-'+id);
+  panel.hidden = false;
+  panel.classList.toggle('blocked', (body.blockers || []).length > 0);
+  const title = (body.blockers || []).length ? 'Recovery blocked' : 'Operator review required';
+  const blockers = (body.blockers || []).map(item => '<li><strong>Blocker:</strong> '+(item.message || item.code)+'</li>').join('');
+  const warnings = (body.warnings || []).map(item => '<li><strong>Warning:</strong> '+(item.message || item.code)+'</li>').join('');
+  const actions = (body.next_actions || []).map(item => '<li>'+item+'</li>').join('');
+  panel.innerHTML = '<div class="readiness-state">'+title+'</div><ul>'+blockers+warnings+actions+'</ul><p><strong>Safe to generate:</strong> '+(body.safe_to_generate ? 'Only after operator confirmation' : 'No')+'</p>';
+  document.getElementById('out-'+id).textContent = JSON.stringify(body, null, 2);
 }
 async function recommend(id) {
   const r = await fetch('/api/jobs/'+id+'/recommendation');
