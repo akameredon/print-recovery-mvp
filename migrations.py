@@ -194,6 +194,46 @@ def migration_13_add_job_revision(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_revision ON jobs(id, revision)")
 
 
+def migration_14_add_operations_controls(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            job_id TEXT,
+            read_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(job_id) REFERENCES jobs(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, id);
+        CREATE TABLE IF NOT EXISTS workspace_settings (
+            workspace_id TEXT PRIMARY KEY,
+            email_enabled INTEGER NOT NULL DEFAULT 0,
+            email_recipients TEXT NOT NULL DEFAULT '[]',
+            retention_days INTEGER NOT NULL DEFAULT 365,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+        );
+        CREATE TABLE IF NOT EXISTS backup_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('scheduled','running','succeeded','failed')),
+            archive_name TEXT,
+            details TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_backup_runs_workspace ON backup_runs(workspace_id, id);
+    """)
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -224,6 +264,7 @@ MIGRATIONS: list[Migration] = [
     (11, "add_workspaces", migration_11_add_workspaces),
     (12, "add_adapter_configurations", migration_12_add_adapter_configurations),
     (13, "add_job_revision", migration_13_add_job_revision),
+    (14, "add_operations_controls", migration_14_add_operations_controls),
 ]
 
 

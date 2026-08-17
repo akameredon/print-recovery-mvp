@@ -178,6 +178,20 @@ def record_event(conn, job_id, event_type, source, payload):
     return True
 
 
+def create_workspace_notifications(conn, workspace_id, kind, title, message, job_id=None):
+    users = conn.execute(
+        "SELECT id FROM users WHERE workspace_id=? AND active=1 AND role IN ('technician','owner')",
+        (workspace_id,),
+    ).fetchall()
+    created = now()
+    for user in users:
+        conn.execute(
+            "INSERT INTO notifications(workspace_id,user_id,kind,title,message,job_id,created_at) VALUES(?,?,?,?,?,?,?)",
+            (workspace_id, user["id"], kind, title, message, job_id, created),
+        )
+    return len(users)
+
+
 def record_status_transition(conn, job_id, to_status, reason, source, force=False):
     current = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not current:
@@ -1381,6 +1395,295 @@ def recovery_success_rate_report():
     )
 
 
+@app.get("/api/notifications")
+def list_notifications():
+    conn = db()
+    user, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    unread_only = request.args.get("unread", "0") == "1"
+    where = "AND read_at IS NULL" if unread_only else ""
+    rows = conn.execute(
+        f"SELECT * FROM notifications WHERE user_id=? AND workspace_id=? {where} ORDER BY id DESC LIMIT 100",
+        (user["id"], user["workspace_id"]),
+    ).fetchall()
+    conn.close()
+    return jsonify(notifications=[row_dict(row) for row in rows])
+
+
+@app.post("/api/notifications/<int:notification_id>/read")
+def mark_notification_read(notification_id):
+    conn = db()
+    user, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    updated = conn.execute(
+        "UPDATE notifications SET read_at=? WHERE id=? AND user_id=? AND workspace_id=?",
+        (now(), notification_id, user["id"], user["workspace_id"]),
+    ).rowcount
+    conn.commit()
+    conn.close()
+    if not updated:
+        return error_response("Notification not found", 404, "NOTIFICATION_NOT_FOUND")
+    return jsonify(ok=True, notification_id=notification_id, read=True)
+
+
+def workspace_settings(conn, workspace_id):
+    conn.execute(
+        "INSERT OR IGNORE INTO workspace_settings(workspace_id,updated_at) VALUES(?,?)",
+        (workspace_id, now()),
+    )
+    return conn.execute(
+        "SELECT * FROM workspace_settings WHERE workspace_id=?", (workspace_id,)
+    ).fetchone()
+
+
+@app.get("/api/settings/email-notifications")
+def email_notification_settings():
+    conn = db()
+    user, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    settings = row_dict(workspace_settings(conn, user["workspace_id"]))
+    conn.commit()
+    conn.close()
+    settings["email_recipients"] = json.loads(settings["email_recipients"])
+    settings.pop("workspace_id", None)
+    return jsonify(settings=settings, delivery_status="configuration_only_no_external_send")
+
+
+@app.put("/api/settings/email-notifications")
+def update_email_notification_settings():
+    conn = db()
+    user, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    payload = request.get_json(silent=True) or {}
+    recipients = payload.get("email_recipients", [])
+    if not isinstance(recipients, list) or any("@" not in str(item) for item in recipients):
+        conn.close()
+        return error_response(
+            "email_recipients must be a list of email addresses", 400, "INVALID_EMAIL_SETTINGS"
+        )
+    enabled = 1 if bool(payload.get("email_enabled", False)) else 0
+    workspace_settings(conn, user["workspace_id"])
+    conn.execute(
+        "UPDATE workspace_settings SET email_enabled=?,email_recipients=?,updated_at=? WHERE workspace_id=?",
+        (
+            enabled,
+            json.dumps([str(item).strip() for item in recipients]),
+            now(),
+            user["workspace_id"],
+        ),
+    )
+    record_audit(
+        conn,
+        "EMAIL_NOTIFICATION_SETTINGS_UPDATED",
+        "workspace_settings",
+        user["workspace_id"],
+        {"enabled": bool(enabled), "recipient_count": len(recipients)},
+        actor=user,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(
+        ok=True,
+        email_enabled=bool(enabled),
+        email_recipients=recipients,
+        delivery_status="configuration_only_no_external_send",
+    )
+
+
+@app.get("/api/settings/retention")
+def get_retention_settings():
+    conn = db()
+    user, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    settings = row_dict(workspace_settings(conn, user["workspace_id"]))
+    conn.commit()
+    conn.close()
+    return jsonify(retention_days=settings["retention_days"], workspace_id=user["workspace_id"])
+
+
+@app.put("/api/settings/retention")
+def update_retention_settings():
+    conn = db()
+    user, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    value = (request.get_json(silent=True) or {}).get("retention_days")
+    if not isinstance(value, int) or not 7 <= value <= 3650:
+        conn.close()
+        return error_response(
+            "retention_days must be an integer between 7 and 3650",
+            400,
+            "INVALID_RETENTION_SETTINGS",
+        )
+    workspace_settings(conn, user["workspace_id"])
+    conn.execute(
+        "UPDATE workspace_settings SET retention_days=?,updated_at=? WHERE workspace_id=?",
+        (value, now(), user["workspace_id"]),
+    )
+    record_audit(
+        conn,
+        "RETENTION_SETTINGS_UPDATED",
+        "workspace_settings",
+        user["workspace_id"],
+        {"retention_days": value},
+        actor=user,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, retention_days=value)
+
+
+@app.post("/api/retention/purge")
+def purge_retained_data():
+    conn = db()
+    user, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    settings = row_dict(workspace_settings(conn, user["workspace_id"]))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=settings["retention_days"])).isoformat()
+    jobs = [
+        row["id"]
+        for row in conn.execute(
+            "SELECT id FROM jobs WHERE workspace_id=? AND created_at < ?",
+            (user["workspace_id"], cutoff),
+        ).fetchall()
+    ]
+    for job_id in jobs:
+        for table in ("events", "checkpoints", "decisions", "job_status_history"):
+            conn.execute(f"DELETE FROM {table} WHERE job_id=?", (job_id,))
+        conn.execute(
+            "DELETE FROM jobs WHERE id=? AND workspace_id=?", (job_id, user["workspace_id"])
+        )
+    record_audit(
+        conn,
+        "RETENTION_PURGE",
+        "workspace",
+        user["workspace_id"],
+        {"deleted_jobs": len(jobs), "cutoff": cutoff},
+        actor=user,
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, deleted_jobs=len(jobs), cutoff=cutoff)
+
+
+@app.get("/api/backups/status")
+def backup_status():
+    conn = db()
+    user, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    rows = conn.execute(
+        "SELECT * FROM backup_runs WHERE workspace_id=? ORDER BY id DESC LIMIT 20",
+        (user["workspace_id"],),
+    ).fetchall()
+    conn.close()
+    return jsonify(
+        workspace_id=user["workspace_id"],
+        backups=[row_dict(row) for row in rows],
+        status_boundary="Status records do not claim that an archive is restorable until a restore test passes.",
+    )
+
+
+@app.post("/api/backups/status")
+def record_backup_status():
+    conn = db()
+    user, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get("status", "")).lower()
+    if status not in {"scheduled", "running", "succeeded", "failed"}:
+        conn.close()
+        return error_response(
+            "status must be scheduled, running, succeeded or failed", 400, "INVALID_BACKUP_STATUS"
+        )
+    timestamp = now()
+    conn.execute(
+        "INSERT INTO backup_runs(workspace_id,status,archive_name,details,started_at,completed_at,created_at) VALUES(?,?,?,?,?,?,?)",
+        (
+            user["workspace_id"],
+            status,
+            payload.get("archive_name"),
+            json.dumps(payload.get("details", {})),
+            payload.get("started_at", timestamp),
+            payload.get("completed_at", timestamp) if status in {"succeeded", "failed"} else None,
+            timestamp,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True, status=status)
+
+
+@app.get("/api/jobs/<job_id>/support-bundle")
+def technician_support_bundle(job_id):
+    conn = db()
+    user, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    job = conn.execute(
+        "SELECT * FROM jobs WHERE id=? AND workspace_id=?", (job_id, user["workspace_id"])
+    ).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    events = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT id,event_type,source,payload,created_at FROM events WHERE job_id=? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ]
+    checkpoints = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT id,y_mm,band_mm,state,evidence,confidence,created_at FROM checkpoints WHERE job_id=? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+    ]
+    configs = [
+        row_dict(row)
+        for row in conn.execute(
+            "SELECT id,name,adapter_type,connection_mode,status,enabled,created_at,updated_at FROM adapter_configurations WHERE workspace_id=?",
+            (user["workspace_id"],),
+        ).fetchall()
+    ]
+    conn.close()
+    return jsonify(
+        bundle_type="technician_support",
+        generated_at=now(),
+        job={
+            "id": job["id"],
+            "file_name": job["file_name"],
+            "status": job["status"],
+            "source_hash": job["source_hash"],
+            "printer_model": job["printer_model"],
+            "rip_name": job["rip_name"],
+        },
+        events=events,
+        checkpoints=checkpoints,
+        adapter_configurations=configs,
+        excluded_secrets=["password_hash", "SMTP passwords", "tokens", "raw secret settings"],
+        safety_boundary="Diagnostics and host-side evidence only; not physical-position certification.",
+    )
+
+
 @app.get("/api/outcomes")
 def owner_outcomes():
     conn = db()
@@ -1763,7 +2066,9 @@ def interrupt(job_id):
     event_type = str(payload.get("event_type", reason)).strip() or reason
     classification = classify_interruption(reason, note, source)
     conn = db()
-    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    job = conn.execute(
+        "SELECT id,workspace_id,file_name FROM jobs WHERE id=?", (job_id,)
+    ).fetchone()
     if not job:
         conn.close()
         return error_response("Job not found", 404, "JOB_NOT_FOUND")
@@ -1775,10 +2080,19 @@ def interrupt(job_id):
         source,
         {"reason": reason, "note": note, "classification": classification},
     )
+    notification_count = create_workspace_notifications(
+        conn,
+        job["workspace_id"],
+        "job_interrupted",
+        "Job interrupted",
+        f"{job['file_name']} was interrupted: {reason}.",
+        job_id,
+    )
     conn.commit()
     conn.close()
     return jsonify(
         ok=True,
+        notifications_created=notification_count,
         status="INTERRUPTED",
         reason=reason,
         note=note,
