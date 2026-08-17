@@ -1125,6 +1125,80 @@ def retire_adapter_configuration(configuration_id):
     return jsonify(configuration_id=configuration_id, status="retired")
 
 
+@app.get("/api/reports/daily-interruptions")
+def daily_interruptions_report():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    report_date = request.args.get("date", now()[:10]).strip()
+    try:
+        datetime.strptime(report_date, "%Y-%m-%d")
+    except ValueError:
+        conn.close()
+        return error_response("date must use YYYY-MM-DD", 400, "INVALID_DAILY_REPORT_QUERY")
+    rows = conn.execute(
+        """SELECT e.id,e.job_id,e.event_type,e.source,e.payload,e.created_at,j.file_name,j.status
+           FROM events e JOIN jobs j ON j.id=e.job_id
+           WHERE j.workspace_id=? AND date(e.created_at)=?
+           ORDER BY e.created_at,e.id""",
+        (actor["workspace_id"], report_date),
+    ).fetchall()
+    interruptions = []
+    by_reason = {}
+    by_classification = {}
+    by_source = {}
+    job_ids = set()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not payload.get("reason"):
+            continue
+        reason = str(payload["reason"])
+        classification = str(payload.get("classification") or "unclassified")
+        source = str(row["source"] or "unknown")
+        job_ids.add(row["job_id"])
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        by_classification[classification] = by_classification.get(classification, 0) + 1
+        by_source[source] = by_source.get(source, 0) + 1
+        interruptions.append(
+            {
+                "event_id": row["id"],
+                "job_id": row["job_id"],
+                "file_name": row["file_name"],
+                "timestamp": row["created_at"],
+                "event_type": row["event_type"],
+                "source": source,
+                "reason": reason,
+                "classification": classification,
+                "note": payload.get("note", ""),
+                "status_at_report": row["status"],
+            }
+        )
+    status_counts = {}
+    for job_id in job_ids:
+        status = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+    conn.close()
+    return jsonify(
+        report_date=report_date,
+        workspace_id=actor["workspace_id"],
+        metrics={
+            "interruption_events": len(interruptions),
+            "affected_jobs": len(job_ids),
+            "by_reason": by_reason,
+            "by_classification": by_classification,
+            "by_source": by_source,
+            "current_job_statuses": status_counts,
+        },
+        interruptions=interruptions,
+        measurement_boundary="Software-observed interruption events; this report does not prove electrical cause or physical printer state.",
+    )
+
+
 @app.get("/api/outcomes")
 def owner_outcomes():
     conn = db()

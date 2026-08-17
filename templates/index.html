@@ -39,6 +39,7 @@
     .audit-panel input, .audit-panel select { color:#18212b; background:white; }
     .adapter-panel { margin-top:14px; padding:12px; border:1px solid #b9c9d8; border-radius:7px; background:#eef5fb; }
     .outcomes-panel { margin-top:14px; padding:12px; border:1px solid #c9b77d; border-radius:7px; background:#fffaf0; }
+    .report-panel { margin-top:14px; padding:12px; border:1px solid #b8cfe0; border-radius:7px; background:#f3f9fd; }
     .metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:10px; }
     .metric { padding:10px; border:1px solid #e4d9b8; border-radius:6px; background:#fff; }
     .metric strong { display:block; font-size:1.2rem; }
@@ -125,6 +126,17 @@
     <div id="outcomes-metrics" class="metric-grid" aria-live="polite"><div class="metric">Load the owner summary.</div></div>
     <p id="outcomes-boundary" class="muted">The estimates are calculated from stored dimensions and recovery decisions; they are not physical material measurements.</p>
     {% else %}<p>Owner permission is required to view workspace waste and recovery outcomes.</p>{% endif %}
+  </section>
+
+  <section class="report-panel" aria-labelledby="daily-report-title">
+    <h2 id="daily-report-title">Daily interruption summary</h2>
+    {% if active_user and active_user.role in ['technician', 'owner'] %}
+    <p>Review software-observed interruption events for the active workspace.</p>
+    <div class="grid"><label>Date<input id="daily-report-date" type="date"></label></div>
+    <button type="button" class="secondary" onclick="loadDailyReport()">Load daily summary</button>
+    <div id="daily-report-output" aria-live="polite" class="profile-list"><p class="muted">Choose a date and load the report.</p></div>
+    <p id="daily-report-boundary" class="muted">The report does not prove electrical cause or physical printer state.</p>
+    {% else %}<p>Technician or owner permission is required to view daily interruption summaries.</p>{% endif %}
   </section>
 
   <section class="audit-panel" aria-labelledby="audit-title">
@@ -265,6 +277,18 @@
     {% endfor %}
   </section>
 <script>
+async function loadDailyReport() {
+  const date = document.getElementById('daily-report-date').value;
+  const r = await fetch('/api/reports/daily-interruptions' + (date ? '?date='+encodeURIComponent(date) : ''));
+  const body = await r.json();
+  const output = document.getElementById('daily-report-output');
+  if (!r.ok) { output.textContent = body.message || 'Unable to load daily report.'; return; }
+  const m = body.metrics;
+  const reasons = Object.entries(m.by_reason).map(([key, value]) => key+': '+value).join(', ') || 'none';
+  const classes = Object.entries(m.by_classification).map(([key, value]) => key+': '+value).join(', ') || 'none';
+  output.innerHTML = '<div class="profile-item"><strong>'+m.interruption_events+' interruption events</strong> across '+m.affected_jobs+' affected jobs<br><span class="muted">Reasons: '+reasons+'<br>Classifications: '+classes+'</span></div>' + (body.interruptions || []).map(item => '<div class="profile-item"><strong>'+item.file_name+'</strong> — '+item.reason+' / '+item.classification+'<br><span class="muted">'+item.timestamp+' · '+item.source+' · '+item.job_id+'</span></div>').join('');
+  document.getElementById('daily-report-boundary').textContent = body.measurement_boundary;
+}
 async function loadOutcomes() {
   const params = new URLSearchParams();
   const from = document.getElementById('outcomes-from').value;
