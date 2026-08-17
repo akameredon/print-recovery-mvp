@@ -237,25 +237,49 @@ def clock_consistency_check(conn, threshold_seconds=5.0, application_timestamp=N
     }
 
 
+def database_integrity_check(conn):
+    quick_check = [row[0] for row in conn.execute("PRAGMA quick_check").fetchall()]
+    integrity_check = [row[0] for row in conn.execute("PRAGMA integrity_check").fetchall()]
+    foreign_key_violations = [
+        {"table": row[0], "rowid": row[1], "parent": row[2], "fkid": row[3]}
+        for row in conn.execute("PRAGMA foreign_key_check").fetchall()
+    ]
+    healthy = quick_check == ["ok"] and integrity_check == ["ok"] and not foreign_key_violations
+    return {
+        "status": "ok" if healthy else "degraded",
+        "quick_check": quick_check,
+        "integrity_check": integrity_check,
+        "foreign_key_violations": foreign_key_violations,
+        "message": (
+            "Database integrity checks passed"
+            if healthy
+            else "Database integrity checks found issues; stop recovery writes and inspect diagnostics"
+        ),
+    }
+
+
 def diagnostics_snapshot():
     checks = {}
     try:
         conn = db()
         conn.execute("SELECT 1").fetchone()
         versions = applied_versions(conn)
+        integrity_check = database_integrity_check(conn)
         clock_check = clock_consistency_check(conn)
         conn.close()
         expected_versions = [version for version, _, _ in MIGRATIONS]
         checks["database"] = {
-            "status": "ok",
+            "status": "ok" if integrity_check["status"] == "ok" else "degraded",
             "schema_versions": versions,
             "expected_versions": expected_versions,
+            "integrity": integrity_check,
         }
         if versions != expected_versions:
             checks["database"] = {
                 "status": "degraded",
                 "schema_versions": versions,
                 "expected_versions": expected_versions,
+                "integrity": integrity_check,
             }
         checks["clock"] = clock_check
     except Exception as error:
@@ -289,6 +313,14 @@ def diagnostics_snapshot():
             "max_upload_mb": CONFIG["max_upload_mb"],
         },
     }
+
+
+@app.get("/api/diagnostics/database-integrity")
+def database_integrity_diagnostics():
+    conn = db()
+    result = database_integrity_check(conn)
+    conn.close()
+    return jsonify(result), (200 if result["status"] == "ok" else 503)
 
 
 @app.get("/healthz")
