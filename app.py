@@ -324,13 +324,38 @@ def current_user(conn):
     if not user_id:
         return None
     row = conn.execute(
-        "SELECT id,username,display_name,role,active,created_at FROM users WHERE id=?",
+        "SELECT id,username,display_name,role,active,created_at,workspace_id FROM users WHERE id=?",
         (user_id,),
     ).fetchone()
     if not row or not row["active"]:
         session.pop("user_id", None)
         return None
     return row_dict(row)
+
+
+def current_workspace_id(conn):
+    user = current_user(conn)
+    return user["workspace_id"] if user else "ws-default"
+
+
+def enforce_job_workspace():
+    if not request.path.startswith("/api/jobs/"):
+        return None
+    job_id = request.view_args.get("job_id") if request.view_args else None
+    if not job_id:
+        return None
+    conn = db()
+    job = conn.execute("SELECT workspace_id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if job and job["workspace_id"] != current_workspace_id(conn):
+        conn.close()
+        return error_response("Job is not in the active workspace", 404, "JOB_NOT_FOUND")
+    conn.close()
+    return None
+
+
+@app.before_request
+def workspace_boundary():
+    return enforce_job_workspace()
 
 
 def require_roles(conn, allowed_roles):
@@ -424,13 +449,57 @@ def audit_log_list():
     return jsonify(items=items, count=len(items), limit=limit)
 
 
+@app.get("/api/workspaces")
+def workspaces_list():
+    conn = db()
+    rows = conn.execute(
+        "SELECT id,name,active,created_at FROM workspaces WHERE active=1 ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return jsonify(workspaces=[row_dict(row) for row in rows])
+
+
+@app.post("/api/workspaces")
+def create_workspace():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    payload = request.get_json(silent=True) or request.form
+    name = str(payload.get("name", "")).strip()
+    if not name or len(name) > 120:
+        conn.close()
+        return error_response(
+            "workspace name is required and must be 120 characters or fewer",
+            400,
+            "INVALID_WORKSPACE",
+        )
+    workspace_id = "ws-" + uuid.uuid4().hex[:12]
+    try:
+        conn.execute(
+            "INSERT INTO workspaces(id,name,active,created_at) VALUES(?,?,1,?)",
+            (workspace_id, name, now()),
+        )
+        record_audit(
+            conn, "WORKSPACE_CREATED", "workspace", workspace_id, {"name": name}, actor=actor
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return error_response("workspace name already exists", 409, "WORKSPACE_EXISTS")
+    conn.close()
+    return jsonify(workspace={"id": workspace_id, "name": name, "active": 1}), 201
+
+
 @app.get("/api/users")
 def users_list():
     conn = db()
     users = [
         row_dict(row)
         for row in conn.execute(
-            "SELECT id,username,display_name,role,active,created_at FROM users ORDER BY username"
+            "SELECT id,username,display_name,role,active,created_at,workspace_id FROM users ORDER BY username"
         ).fetchall()
     ]
     active_user = current_user(conn)
@@ -444,6 +513,7 @@ def create_user():
     username = str(payload.get("username", "")).strip().lower()
     display_name = str(payload.get("display_name", "")).strip()
     role = str(payload.get("role", "")).strip().lower()
+    workspace_id = str(payload.get("workspace_id", "ws-default")).strip() or "ws-default"
     password = str(payload.get("password", ""))
     if not username or not display_name or role not in USER_ROLES or not password:
         return error_response(
@@ -457,10 +527,24 @@ def create_user():
         return error_response("password must be at least 8 characters", 400, "WEAK_PASSWORD")
     user_id = uuid.uuid4().hex[:12]
     conn = db()
+    if not conn.execute(
+        "SELECT 1 FROM workspaces WHERE id=? AND active=1", (workspace_id,)
+    ).fetchone():
+        conn.close()
+        return error_response("workspace not found", 404, "WORKSPACE_NOT_FOUND")
     try:
         conn.execute(
-            "INSERT INTO users(id,username,display_name,role,active,created_at,password_hash) VALUES(?,?,?,?,?,?,?)",
-            (user_id, username, display_name, role, 1, now(), generate_password_hash(password)),
+            "INSERT INTO users(id,username,display_name,role,active,created_at,password_hash,workspace_id) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                user_id,
+                username,
+                display_name,
+                role,
+                1,
+                now(),
+                generate_password_hash(password),
+                workspace_id,
+            ),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -492,7 +576,7 @@ def select_session_user():
     password = str(payload.get("password", ""))
     conn = db()
     row = conn.execute(
-        "SELECT id,username,display_name,role,active,created_at,password_hash FROM users WHERE username=? AND active=1",
+        "SELECT id,username,display_name,role,active,created_at,password_hash,workspace_id FROM users WHERE username=? AND active=1",
         (username,),
     ).fetchone()
     if (
@@ -513,7 +597,16 @@ def select_session_user():
     login_time = now()
     conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (login_time, row["id"]))
     user = {
-        key: row[key] for key in ("id", "username", "display_name", "role", "active", "created_at")
+        key: row[key]
+        for key in (
+            "id",
+            "username",
+            "display_name",
+            "role",
+            "active",
+            "created_at",
+            "workspace_id",
+        )
     }
     record_audit(
         conn, "LOGIN_SUCCESS", "user", user["id"], {"username": user["username"]}, actor=user
@@ -780,11 +873,13 @@ JOB_FILTERS = {
 }
 
 
-def filtered_jobs(conn, filter_name, search="", date_from="", date_to=""):
+def filtered_jobs(
+    conn, filter_name, search="", date_from="", date_to="", workspace_id="ws-default"
+):
     if filter_name not in JOB_FILTERS:
         raise ValueError("filter must be one of: all, active, interrupted, completed")
-    where = []
-    params = []
+    where = ["workspace_id=?"]
+    params = [workspace_id]
     statuses = JOB_FILTERS[filter_name]
     if statuses is not None:
         placeholders = ",".join("?" for _ in statuses)
@@ -834,6 +929,7 @@ def jobs_list():
                 values["search"],
                 values["date_from"],
                 values["date_to"],
+                current_workspace_id(conn),
             )
         ]
         conn.close()
@@ -855,6 +951,7 @@ def index():
                 values["search"],
                 values["date_from"],
                 values["date_to"],
+                current_workspace_id(conn),
             )
         ]
         users = [
@@ -898,8 +995,8 @@ def create_job():
     form = request.form
     conn = db()
     conn.execute(
-        """INSERT INTO jobs(id,file_name,source_path,source_hash,printer_model,rip_name,media_width_mm,media_length_mm,origin_x_mm,origin_y_mm,scale,resolution,passes,profile,overlap_mm,orientation,status,created_at,updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO jobs(id,file_name,source_path,source_hash,printer_model,rip_name,media_width_mm,media_length_mm,origin_x_mm,origin_y_mm,scale,resolution,passes,profile,overlap_mm,orientation,status,created_at,updated_at,workspace_id)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             job_id,
             safe_name,
@@ -920,6 +1017,7 @@ def create_job():
             "READY",
             now(),
             now(),
+            current_workspace_id(conn),
         ),
     )
     conn.execute(

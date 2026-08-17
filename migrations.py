@@ -147,6 +147,26 @@ def migration_10_add_audit_log(conn: sqlite3.Connection) -> None:
         """)
 
 
+def migration_11_add_workspaces(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO workspaces(id,name,active,created_at)
+        VALUES('ws-default','Default shop',1,CURRENT_TIMESTAMP);
+        """)
+    conn.execute("ALTER TABLE users ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'ws-default'")
+    conn.execute("ALTER TABLE jobs ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'ws-default'")
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_users_workspace ON users(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_workspaces_active ON workspaces(active);
+        """)
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -174,6 +194,7 @@ MIGRATIONS: list[Migration] = [
     (8, "add_password_auth", migration_8_add_password_auth),
     (9, "add_printer_profiles", migration_9_add_printer_profiles),
     (10, "add_audit_log", migration_10_add_audit_log),
+    (11, "add_workspaces", migration_11_add_workspaces),
 ]
 
 
