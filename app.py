@@ -31,6 +31,7 @@ from adapters import SimulatedAdapter
 from checkpoint_confidence import calculate_checkpoint_confidence
 from config import load_config, resolve_path
 from coordinate_conversion import media_mm_to_pixel
+from crash_report import build_crash_report
 from evidence_bundle import build_evidence_bundle, render_handoff_markdown
 from interruption_classification import classify_interruption
 from job_manifest import build_job_manifest
@@ -324,6 +325,29 @@ def diagnostics_snapshot():
             "max_upload_mb": CONFIG["max_upload_mb"],
         },
     }
+
+
+@app.get("/api/diagnostics/crash-report")
+def crash_report_export():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    conn.close()
+    report = build_crash_report(
+        report_id=uuid.uuid4().hex,
+        generated_at=now(),
+        app_version=APP_VERSION,
+        log_path=LOG_PATH,
+        diagnostics=diagnostics_snapshot(),
+        configuration=CONFIG,
+    )
+    response = jsonify(report)
+    response.headers["Content-Disposition"] = (
+        'attachment; filename="print_recovery_crash_report.json"'
+    )
+    return response
 
 
 @app.get("/api/diagnostics/database-integrity")
