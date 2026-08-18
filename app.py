@@ -62,6 +62,15 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = CONFIG["max_upload_mb"] * 1024 * 1024
 app.secret_key = os.environ.get("PRINT_RECOVERY_SESSION_SECRET", "day61-local-session-key")
 SESSION_TTL_SECONDS = int(os.environ.get("PRINT_RECOVERY_SESSION_TTL_SECONDS", "3600"))
+UPLOAD_ATTEMPTS = {}
+ALLOWED_UPLOAD_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
+ALLOWED_UPLOAD_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/tiff",
+    "image/webp",
+    "application/octet-stream",
+}
 
 
 @app.before_request
@@ -1970,16 +1979,61 @@ def index():
     )
 
 
+def upload_client_key():
+    return f"{request.remote_addr or 'unknown'}:{session.get('user_id', 'anonymous')}"
+
+
+def check_upload_rate_limit():
+    key = upload_client_key()
+    current = time.time()
+    attempts = [stamp for stamp in UPLOAD_ATTEMPTS.get(key, []) if current - stamp < 60]
+    if len(attempts) >= CONFIG["upload_rate_limit_per_minute"]:
+        retry_after = max(1, int(60 - (current - attempts[0])))
+        UPLOAD_ATTEMPTS[key] = attempts
+        response = error_response(
+            "Upload rate limit exceeded; retry later", 429, "UPLOAD_RATE_LIMITED"
+        )
+        response[0].headers["Retry-After"] = str(retry_after)
+        return response
+    attempts.append(current)
+    UPLOAD_ATTEMPTS[key] = attempts
+    return None
+
+
+def validate_upload(file):
+    safe_name = Path(file.filename or "").name
+    extension = Path(safe_name).suffix.lower()
+    if not safe_name or safe_name in {".", ".."} or extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        return None, error_response("Unsupported upload extension", 400, "INVALID_UPLOAD_TYPE")
+    if file.mimetype and file.mimetype.lower() not in ALLOWED_UPLOAD_MIME_TYPES:
+        return None, error_response("Unsupported upload MIME type", 400, "INVALID_UPLOAD_TYPE")
+    max_bytes = CONFIG["max_upload_mb"] * 1024 * 1024
+    if request.content_length and request.content_length > max_bytes + 1024 * 1024:
+        return None, error_response("Upload exceeds configured size limit", 413, "UPLOAD_TOO_LARGE")
+    return safe_name, None
+
+
 @app.post("/api/jobs")
 def create_job():
     logger.info("job_creation_started", extra={"route": request.path})
+    limited = check_upload_rate_limit()
+    if limited:
+        return limited
     file = request.files.get("file")
     if not file or not file.filename:
-        return jsonify(error="An image or source file is required for this prototype."), 400
+        return error_response(
+            "An image or source file is required for this prototype.", 400, "MISSING_UPLOAD"
+        )
+    safe_name, validation_error = validate_upload(file)
+    if validation_error:
+        return validation_error
     job_id = uuid.uuid4().hex[:12]
-    safe_name = Path(file.filename).name
     source_path = DATA_DIR / f"{job_id}_{safe_name}"
     file.save(source_path)
+    max_bytes = CONFIG["max_upload_mb"] * 1024 * 1024
+    if source_path.stat().st_size > max_bytes:
+        source_path.unlink(missing_ok=True)
+        return error_response("Upload exceeds configured size limit", 413, "UPLOAD_TOO_LARGE")
     digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
     form = request.form
     conn = db()
