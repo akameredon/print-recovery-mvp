@@ -1615,6 +1615,92 @@ def record_pilot_support_review():
     )
 
 
+@app.post("/api/release-decision")
+def record_release_decision():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    payload = request.get_json(silent=True) or {}
+    decision = str(payload.get("decision", "")).strip().lower()
+    if decision not in {"release", "extend_pilot", "return_to_engineering"}:
+        conn.close()
+        return error_response(
+            "decision must be release, extend_pilot or return_to_engineering",
+            400,
+            "INVALID_RELEASE_DECISION",
+        )
+    start, end, window_error = pilot_window(payload.get("pilot_start"), payload.get("pilot_end"))
+    if window_error:
+        conn.close()
+        return window_error
+    rationale = str(payload.get("rationale", "")).strip()
+    evidence = payload.get("evidence") or {}
+    if not rationale or len(rationale) > 4000 or not isinstance(evidence, dict):
+        conn.close()
+        return error_response(
+            "rationale and an evidence object are required", 400, "INVALID_RELEASE_EVIDENCE"
+        )
+    physical_tests = int(evidence.get("physical_test_count", 0) or 0)
+    field_validated = evidence.get("field_validation_status") == "field_validated"
+    support_review_complete = bool(evidence.get("support_review_complete"))
+    if decision == "release" and not (
+        field_validated and physical_tests > 0 and support_review_complete
+    ):
+        conn.close()
+        return error_response(
+            "release requires field validation, at least one physical test and completed support review",
+            409,
+            "RELEASE_EVIDENCE_INSUFFICIENT",
+            recommended_decision="extend_pilot",
+        )
+    details = {
+        "decision": decision,
+        "pilot_start": start.date().isoformat(),
+        "pilot_end": (end - timedelta(days=1)).date().isoformat(),
+        "rationale": rationale,
+        "evidence": evidence,
+        "evidence_status": "field_validated" if field_validated else "software_recorded_only",
+    }
+    record_audit(
+        conn,
+        "RELEASE_DECISION_RECORDED",
+        "release_decision",
+        f"{details['pilot_start']}:{details['pilot_end']}",
+        details,
+        actor=actor,
+    )
+    conn.commit()
+    conn.close()
+    return (
+        jsonify(
+            ok=True,
+            decision=details,
+            measurement_boundary="A release decision records governance evidence; it does not guarantee printer-specific recovery accuracy.",
+        ),
+        201,
+    )
+
+
+@app.get("/api/release-decision")
+def latest_release_decision():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    row = conn.execute(
+        "SELECT details,created_at FROM audit_log WHERE actor_user_id=? AND action='RELEASE_DECISION_RECORDED' ORDER BY id DESC LIMIT 1",
+        (actor["id"],),
+    ).fetchone()
+    conn.close()
+    return jsonify(
+        decision=json.loads(row["details"]) if row else None,
+        created_at=row["created_at"] if row else None,
+    )
+
+
 @app.get("/api/notifications")
 def list_notifications():
     conn = db()
