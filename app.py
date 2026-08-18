@@ -43,6 +43,7 @@ from readiness_summary import summarize_readiness
 from recovery_report import render_printable_recovery_report, render_recovery_report
 from recovery_safety import assess_recovery_safety
 from registration_strip import generate_registration_strip
+from secrets_store import SecretStore
 from signal_matrix import assess_signal_matrix
 
 ROOT = Path(__file__).resolve().parent
@@ -54,6 +55,7 @@ DB_PATH = DATA_DIR / "print_recovery.sqlite3"
 LOG_PATH = DATA_DIR / "print_recovery.log"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+secret_store = SecretStore(ROOT)
 
 logger = configure_logging(str(LOG_PATH), CONFIG["log_level"])
 app = Flask(__name__)
@@ -987,6 +989,9 @@ def adapter_payload(payload):
         return None, error_response(
             "secrets are not stored in adapter configuration", 400, "SECRET_NOT_ALLOWED"
         )
+    secrets = payload.get("secrets", {})
+    if not isinstance(secrets, dict):
+        return None, error_response("secrets must be a JSON object", 400, "INVALID_SECRET_PAYLOAD")
     return {
         "name": name,
         "adapter_type": adapter_type,
@@ -994,6 +999,8 @@ def adapter_payload(payload):
         "connection_mode": connection_mode,
         "trace_or_endpoint": trace_or_endpoint,
         "settings": settings,
+        "secrets": secrets,
+        "secret_ciphertext": secret_store.encrypt_json(secrets) if secrets else "",
         "status": status,
         "enabled": bool(payload.get("enabled", False)),
     }, None
@@ -1004,6 +1011,8 @@ def public_adapter(row):
     if item:
         item["settings"] = json.loads(item["settings"] or "{}")
         item["enabled"] = bool(item["enabled"])
+        encrypted = bool(item.pop("secret_ciphertext", ""))
+        item["secret_storage"] = {"encrypted": encrypted, "plaintext_returned": False}
     return item
 
 
@@ -1039,8 +1048,8 @@ def create_adapter_configuration():
     item_id = uuid.uuid4().hex[:12]
     try:
         conn.execute(
-            """INSERT INTO adapter_configurations(id,workspace_id,name,adapter_type,printer_profile_id,connection_mode,trace_or_endpoint,settings,status,enabled,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO adapter_configurations(id,workspace_id,name,adapter_type,printer_profile_id,connection_mode,trace_or_endpoint,settings,secret_ciphertext,status,enabled,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 item_id,
                 actor["workspace_id"],
@@ -1050,6 +1059,7 @@ def create_adapter_configuration():
                 values["connection_mode"],
                 values["trace_or_endpoint"],
                 json.dumps(values["settings"], sort_keys=True),
+                values["secret_ciphertext"],
                 values["status"],
                 int(values["enabled"]),
                 now(),
@@ -1101,7 +1111,7 @@ def update_adapter_configuration(configuration_id):
         )
     try:
         conn.execute(
-            """UPDATE adapter_configurations SET name=?,adapter_type=?,printer_profile_id=?,connection_mode=?,trace_or_endpoint=?,settings=?,status=?,enabled=?,updated_at=? WHERE id=? AND workspace_id=?""",
+            """UPDATE adapter_configurations SET name=?,adapter_type=?,printer_profile_id=?,connection_mode=?,trace_or_endpoint=?,settings=?,secret_ciphertext=?,status=?,enabled=?,updated_at=? WHERE id=? AND workspace_id=?""",
             (
                 values["name"],
                 values["adapter_type"],
@@ -1109,6 +1119,7 @@ def update_adapter_configuration(configuration_id):
                 values["connection_mode"],
                 values["trace_or_endpoint"],
                 json.dumps(values["settings"], sort_keys=True),
+                values["secret_ciphertext"],
                 values["status"],
                 int(values["enabled"]),
                 now(),

@@ -234,6 +234,12 @@ def migration_14_add_operations_controls(conn: sqlite3.Connection) -> None:
     """)
 
 
+def migration_15_add_encrypted_adapter_secrets(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "ALTER TABLE adapter_configurations ADD COLUMN secret_ciphertext TEXT NOT NULL DEFAULT ''"
+    )
+
+
 def migration_3_add_status_history(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS job_status_history (
@@ -265,6 +271,7 @@ MIGRATIONS: list[Migration] = [
     (12, "add_adapter_configurations", migration_12_add_adapter_configurations),
     (13, "add_job_revision", migration_13_add_job_revision),
     (14, "add_operations_controls", migration_14_add_operations_controls),
+    (15, "add_encrypted_adapter_secrets", migration_15_add_encrypted_adapter_secrets),
 ]
 
 
