@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -29,6 +31,13 @@ class SecretStore:
         if not ciphertext:
             return {}
         return json.loads(self._fernet.decrypt(ciphertext.encode()).decode())
+
+    def sign_json(self, value: dict) -> str:
+        canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        return hmac.new(self._key, canonical, hashlib.sha256).hexdigest()
+
+    def verify_json(self, value: dict, signature: str) -> bool:
+        return hmac.compare_digest(self.sign_json(value), str(signature))
 
     def describe(self) -> dict:
         return {

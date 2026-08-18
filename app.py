@@ -3215,6 +3215,16 @@ def continuation(job_id):
     record_status_transition(
         conn, job_id, "RECOVERY_READY", "continuation_generated", "recovery_engine"
     )
+    signed_metadata = {
+        "job_id": job_id,
+        "file": output_name,
+        "version": version,
+        "source_hash": job["source_hash"],
+        "y_mm": y_mm,
+        "overlap_mm": overlap_mm,
+        "generated_at": now(),
+    }
+    metadata_signature = secret_store.sign_json(signed_metadata)
     record_event(
         conn,
         job_id,
@@ -3226,6 +3236,8 @@ def continuation(job_id):
             "source_hash": job["source_hash"],
             "y_mm": y_mm,
             "overlap_mm": overlap_mm,
+            "metadata": signed_metadata,
+            "signature": metadata_signature,
         },
     )
     conn.commit()
@@ -3238,7 +3250,42 @@ def continuation(job_id):
         overlap_mm=overlap_mm,
         version=version,
         source_hash=job["source_hash"],
+        signed_metadata=signed_metadata,
+        metadata_signature=metadata_signature,
     )
+
+
+@app.get("/api/jobs/<job_id>/continuation-metadata")
+def verify_continuation_metadata(job_id):
+    filename = request.args.get("file", "").strip()
+    if not filename:
+        return error_response("file is required", 400, "INVALID_CONTINUATION_METADATA_QUERY")
+    conn = db()
+    job = conn.execute("SELECT id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        conn.close()
+        return error_response("Job not found", 404, "JOB_NOT_FOUND")
+    event = conn.execute(
+        "SELECT payload FROM events WHERE job_id=? AND event_type='CONTINUATION_GENERATED' ORDER BY id DESC",
+        (job_id,),
+    ).fetchall()
+    conn.close()
+    for row in event:
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        metadata = payload.get("metadata") or {}
+        if metadata.get("file") == filename:
+            signature = payload.get("signature", "")
+            verified = secret_store.verify_json(metadata, signature)
+            return jsonify(
+                metadata=metadata,
+                signature=signature,
+                verified=verified,
+                verification_status="verified" if verified else "tampered",
+            ), (200 if verified else 409)
+    return error_response("Continuation metadata not found", 404, "CONTINUATION_METADATA_NOT_FOUND")
 
 
 @app.get("/api/jobs/<job_id>/review")
