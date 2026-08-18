@@ -1,0 +1,34 @@
+{
+  "contract_version": "1.0",
+  "status": "proposed_requires_operator_signoff",
+  "manufacturer": "Suretec",
+  "printer_model": "XP600 (10FT)",
+  "printhead": "Epson XP600 (DX11)",
+  "rip_name": "Maintop",
+  "rip_version": "TO_BE_CONFIRMED (Maintop Full / Maintop DTP)",
+  "connection_mode": "USB 2.0",
+  "job_input_path": "TO_BE_CONFIRMED",
+  "job_output_or_hotfolder": "TO_BE_CONFIRMED",
+  "max_print_width_mm": 1650,
+  "example_media_length_mm": 3048,
+  "ink_type": "Eco Solvent / Sublimation",
+  "media_types": ["PVC", "Flex", "Vinyl", "OWV", "Transfer paper"],
+  "observable_signals": [
+    "host_job_created",
+    "host_transmission_started",
+    "host_transmission_completed",
+    "operator_checkpoint",
+    "operator_interruption_reason",
+    "maintop_job_status_if_available"
+  ],
+  "physical_validation_required": [
+    "exact Suretec XP600 firmware / board version",
+    "exact Maintop version (Full / DTP)",
+    "USB connection behaviour and any driver name",
+    "available queue or progress signals from Maintop",
+    "controlled pause and power-interruption test results",
+    "sample job with known media length (e.g. 10 feet / 3048 mm)"
+  ],
+  "recovery_mode": "assisted_only",
+  "notes": "Primary target contract for Nigerian shop testing. Suretec XP600 with Epson XP600 (DX11) printhead and Maintop RIP. This is an assisted-recovery contract only. It does not claim printer control, physical position measurement, or certified continuation quality until field validation is completed and the status is updated."
+}
