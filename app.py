@@ -38,6 +38,7 @@ from job_manifest import build_job_manifest
 from lifecycle_observer import observe_lifecycle
 from logging_utils import configure_logging, set_correlation_id
 from migrations import MIGRATIONS, applied_versions, run_migrations
+from offline_mode import ConnectivityState
 from orientation_validation import validate_orientation_origin
 from output_naming import continuation_output_name
 from readiness_summary import summarize_readiness
@@ -57,6 +58,7 @@ LOG_PATH = DATA_DIR / "print_recovery.log"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 secret_store = SecretStore(ROOT)
+connectivity_state = ConnectivityState()
 
 logger = configure_logging(str(LOG_PATH), CONFIG["log_level"])
 app = Flask(__name__)
@@ -1468,6 +1470,148 @@ def recovery_success_rate_report():
         decisions=details,
         success_rate_definition="Approved decisions divided by approved plus rejected decisions; pending, restart and test-first categories are shown separately.",
         measurement_boundary="Software-recorded decision outcomes; approval does not prove physical print quality or successful material recovery.",
+    )
+
+
+def pilot_window(start_value, end_value):
+    try:
+        start = datetime.fromisoformat(str(start_value).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(end_value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return (
+            None,
+            None,
+            error_response(
+                "pilot_start and pilot_end must be ISO dates", 400, "INVALID_PILOT_WINDOW"
+            ),
+        )
+    if end < start or (end - start).days + 1 != 7:
+        return (
+            None,
+            None,
+            error_response(
+                "pilot window must cover exactly seven calendar days", 400, "INVALID_PILOT_WINDOW"
+            ),
+        )
+    return start, end + timedelta(days=1), None
+
+
+@app.get("/api/connectivity")
+def connectivity_status():
+    return jsonify(connectivity_state.snapshot())
+
+
+@app.post("/api/connectivity")
+def update_connectivity():
+    payload = request.get_json(silent=True) or {}
+    try:
+        snapshot = connectivity_state.set_mode(str(payload.get("mode", "")).strip().lower())
+    except ValueError as error:
+        return error_response(str(error), 400, "INVALID_CONNECTIVITY_MODE")
+    return jsonify(snapshot)
+
+
+@app.get("/api/pilot/report")
+def pilot_report():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    start, end, window_error = pilot_window(
+        request.args.get("pilot_start"), request.args.get("pilot_end")
+    )
+    if window_error:
+        conn.close()
+        return window_error
+    start_text, end_text = start.isoformat(), end.isoformat()
+    jobs = conn.execute(
+        "SELECT id,file_name,status,created_at FROM jobs WHERE workspace_id=? AND created_at>=? AND created_at<? ORDER BY created_at",
+        (actor["workspace_id"], start_text, end_text),
+    ).fetchall()
+    job_ids = [row["id"] for row in jobs]
+    events = []
+    if job_ids:
+        placeholders = ",".join("?" for _ in job_ids)
+        events = conn.execute(
+            f"SELECT event_type,source,created_at,payload FROM events WHERE job_id IN ({placeholders}) AND created_at>=? AND created_at<? ORDER BY created_at",
+            (*job_ids, start_text, end_text),
+        ).fetchall()
+    reviews = conn.execute(
+        "SELECT details,created_at FROM audit_log WHERE actor_user_id=? AND action='PILOT_SUPPORT_REVIEW_RECORDED' AND created_at>=? AND created_at<? ORDER BY created_at",
+        (actor["id"], start_text, end_text),
+    ).fetchall()
+    interruption_types = {}
+    approved = rejected = 0
+    for event in events:
+        interruption_types[event["event_type"]] = interruption_types.get(event["event_type"], 0) + 1
+        if event["event_type"] == "RECOVERY_REVIEWED":
+            try:
+                action = json.loads(event["payload"] or "{}").get("action")
+            except json.JSONDecodeError:
+                action = None
+            approved += action == "approved"
+            rejected += action == "rejected"
+    conn.close()
+    return jsonify(
+        pilot_status="report_ready_for_support_review",
+        pilot_start=start.date().isoformat(),
+        pilot_end=(end - timedelta(days=1)).date().isoformat(),
+        workspace_id=actor["workspace_id"],
+        metrics={
+            "jobs": len(jobs),
+            "events": len(events),
+            "interruptions": sum(interruption_types.values()),
+            "approved_reviews": approved,
+            "rejected_reviews": rejected,
+        },
+        event_types=interruption_types,
+        support_reviews=[json.loads(row["details"] or "{}") for row in reviews],
+        measurement_boundary="Software-recorded pilot activity and support notes; this is not proof of physical print quality or material recovery.",
+    )
+
+
+@app.post("/api/pilot/support-review")
+def record_pilot_support_review():
+    conn = db()
+    actor, auth_error = require_roles(conn, {"technician", "owner"})
+    if auth_error:
+        conn.close()
+        return auth_error
+    payload = request.get_json(silent=True) or {}
+    start, end, window_error = pilot_window(payload.get("pilot_start"), payload.get("pilot_end"))
+    if window_error:
+        conn.close()
+        return window_error
+    note = str(payload.get("note", "")).strip()
+    if not note or len(note) > 2000:
+        conn.close()
+        return error_response(
+            "note is required and must be 2000 characters or fewer", 400, "INVALID_PILOT_REVIEW"
+        )
+    details = {
+        "pilot_start": start.date().isoformat(),
+        "pilot_end": (end - timedelta(days=1)).date().isoformat(),
+        "note": note,
+        "issue_count": int(payload.get("issue_count", 0) or 0),
+    }
+    record_audit(
+        conn,
+        "PILOT_SUPPORT_REVIEW_RECORDED",
+        "pilot_period",
+        f"{details['pilot_start']}:{details['pilot_end']}",
+        details,
+        actor=actor,
+    )
+    conn.commit()
+    conn.close()
+    return (
+        jsonify(
+            ok=True,
+            review=details,
+            measurement_boundary="Support review records observations; it does not certify physical recovery accuracy.",
+        ),
+        201,
     )
 
 
