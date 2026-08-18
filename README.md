@@ -2,7 +2,7 @@
 
 This is the first local prototype of the software-first recovery assistant. It currently provides a protected job manifest, source hashing, logical checkpoint recording, interruption events, confidence-aware recovery recommendations and assisted continuation generation for image test jobs.
 
-## Run
+## Run (development)
 
 From this directory:
 
@@ -12,7 +12,20 @@ python3 app.py
 
 Open `http://127.0.0.1:5173` in a browser. Create a test job with an image and media dimensions, record one or more checkpoints, mark an interruption, review the recommendation and generate a continuation image.
 
-## Installation
+## Windows desktop / installer
+
+To produce a normal Windows program (`.exe` + Next → Next → Finish installer) that you can put on a flash drive, see:
+
+**[docs/desktop-packaging.md](docs/desktop-packaging.md)**
+
+Key files already in the repo:
+
+- `packaging/windows/build-exe.ps1` — builds the standalone `PrintRecovery.exe`
+- `packaging/windows/PrintRecovery.iss` — Inno Setup script for the real installer
+- `packaging/windows/create-portable.ps1` — makes a flash-drive ready folder
+- `packaging/windows/Run-PrintRecovery.bat` — simple double-click launcher
+
+## Installation (source)
 
 See [docs/installation.md](docs/installation.md) for prerequisites, setup, configuration, testing, startup and troubleshooting.
 
